@@ -1,16 +1,16 @@
 import re
 import logging
-# import os
 from functools import lru_cache
 import time
-#import concurrent
+import urllib.parse
+from urllib.parse import urlparse, urljoin, urlunparse
+from typing import List, Dict, Union, Optional
 import nltk
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 
 # Use multiprocessing to speed up processing
-# from functools import partial
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 # Import the splitter functionality
@@ -69,7 +69,7 @@ def _process_single_text(text, stopwords_set, lemmatizer_instance):
     # Tokenize and filter out stopwords
     tokens = [
         token for token in word_tokenize(text)
-        if token.isalpha() and token not in stopwords_set
+        if token.isalpha() # and token not in stopwords_set
     ]
 
     # Apply lemmatization
@@ -83,19 +83,271 @@ def _process_text_batch(batch_data):
     return [_process_single_text(text, stopwords_set, lemmatizer_instance) for text in texts]
 
 
-class TextCleaner:
-    """A class for text cleaning operations with optional word splitting."""
+def standardize_urls(urls: Union[str, List[str]], 
+                     default_scheme: str = 'https',
+                     normalize_case: bool = True, 
+                     remove_fragments: bool = True,
+                     remove_query_params: Union[bool, List[str]] = False,
+                     required_query_params: Optional[List[str]] = None,
+                     remove_trailing_slash: bool = True,
+                     remove_www: bool = True) -> Union[str, List[str]]:
+    """
+    Standardize URLs by applying consistent formatting rules.
+    
+    Args:
+        urls: A single URL string or a list of URL strings to standardize
+        default_scheme: Default scheme to use if none is present (default: 'https')
+        normalize_case: Convert domain to lowercase (default: True)
+        remove_fragments: Remove URL fragments (default: True)
+        remove_query_params: If True, removes all query parameters; if a list, removes only specified parameters
+        required_query_params: List of query parameters to keep even when remove_query_params=True
+        remove_trailing_slash: Remove trailing slash from path (default: True)
+        remove_www: Remove 'www.' from the domain (default: True)
+    
+    Returns:
+        Standardized URL string or list of standardized URL strings depending on input
+    """
+    single_input = isinstance(urls, str)
+    if single_input:
+        urls = [urls]
+    
+    standardized_urls = []
+    for url in urls:
+        if not url or not isinstance(url, str):
+            standardized_urls.append('')
+            continue
+            
+        # Handle relative URLs starting with //
+        if url.startswith('//'):
+            url = f"{default_scheme}:{url}"
+        
+        # Add default scheme if missing
+        if not url.startswith(('http://', 'https://')):
+            # Check if it's a valid domain-like string
+            if re.match(r'^[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}', url):
+                url = f"{default_scheme}://{url}"
+        
+        try:
+            # Parse the URL
+            parsed = urlparse(url)
+            
+            # Skip empty URLs
+            if not parsed.netloc and not parsed.path:
+                standardized_urls.append('')
+                continue
+            
+            # Apply case normalization
+            if normalize_case:
+                parsed = parsed._replace(netloc=parsed.netloc.lower())
+            
+            # Remove www if specified
+            if remove_www and parsed.netloc.startswith('www.'):
+                parsed = parsed._replace(netloc=parsed.netloc[4:])
+            
+            # Process query parameters
+            if parsed.query and (remove_query_params is True or isinstance(remove_query_params, list)):
+                query_dict = dict(urllib.parse.parse_qsl(parsed.query))
+                
+                if isinstance(remove_query_params, list):
+                    # Remove specific query parameters
+                    for param in remove_query_params:
+                        query_dict.pop(param, None)
+                elif required_query_params:
+                    # Keep only required parameters
+                    query_dict = {k: v for k, v in query_dict.items() if k in required_query_params}
+                else:
+                    # Remove all query parameters
+                    query_dict = {}
+                
+                # Rebuild query string
+                query_string = urllib.parse.urlencode(query_dict)
+                parsed = parsed._replace(query=query_string)
+            
+            # Remove fragments if specified
+            if remove_fragments:
+                parsed = parsed._replace(fragment='')
+            
+            # Handle trailing slash
+            if remove_trailing_slash and parsed.path.endswith('/') and len(parsed.path) > 1:
+                parsed = parsed._replace(path=parsed.path[:-1])
+            
+            # Reconstruct the URL
+            standardized_url = urlunparse(parsed)
+            standardized_urls.append(standardized_url)
+            
+        except Exception:
+            # If URL parsing fails, return original
+            standardized_urls.append(url)
+    
+    return standardized_urls[0] if single_input else standardized_urls
 
-    def __init__(self, split_methods=None, custom_stop_words=None):
+
+def extract_links_from_html(html_content: str, base_url: str = None) -> Dict[str, List[str]]:
+    """
+    Extract all links from HTML content and categorize them by type.
+    
+    Args:
+        html_content: HTML content as string
+        base_url: Base URL to resolve relative URLs
+    
+    Returns:
+        Dictionary with categorized links (navigation, images, scripts, stylesheets, etc.)
+    """
+    if not html_content:
+        return {"navigation": [], "images": [], "scripts": [], "stylesheets": [], "other": []}
+    
+    links = {
+        "navigation": [],  # a, link tags
+        "images": [],      # img tags
+        "scripts": [],     # script tags
+        "stylesheets": [], # link[rel=stylesheet]
+        "other": []        # other link types
+    }
+    
+    # Extract href from a and link tags
+    href_pattern = re.compile(r'<a[^>]*href=["\'](.*?)["\']', re.IGNORECASE)
+    link_pattern = re.compile(r'<link[^>]*href=["\'](.*?)["\']', re.IGNORECASE)
+    
+    # Extract src from img, script tags
+    img_pattern = re.compile(r'<img[^>]*src=["\'](.*?)["\']', re.IGNORECASE)
+    script_pattern = re.compile(r'<script[^>]*src=["\'](.*?)["\']', re.IGNORECASE)
+    
+    # Extract stylesheet links
+    stylesheet_pattern = re.compile(r'<link[^>]*rel=["\'](stylesheet)["\'][^>]*href=["\'](.*?)["\']|<link[^>]*href=["\'](.*?)["\'][^>]*rel=["\'](stylesheet)["\']', re.IGNORECASE)
+    
+    # Process navigation links
+    for match in href_pattern.finditer(html_content):
+        url = match.group(1)
+        if base_url:
+            url = urljoin(base_url, url)
+        links["navigation"].append(url)
+    
+    # Process general link tags
+    for match in link_pattern.finditer(html_content):
+        url = match.group(1)
+        if base_url:
+            url = urljoin(base_url, url)
+        # Skip stylesheet links as they're handled separately
+        if not re.search(r'rel=["\'](stylesheet)["\']', match.group(0), re.IGNORECASE):
+            links["other"].append(url)
+    
+    # Process image links
+    for match in img_pattern.finditer(html_content):
+        url = match.group(1)
+        if base_url:
+            url = urljoin(base_url, url)
+        links["images"].append(url)
+    
+    # Process script links
+    for match in script_pattern.finditer(html_content):
+        url = match.group(1)
+        if base_url:
+            url = urljoin(base_url, url)
+        links["scripts"].append(url)
+    
+    # Process stylesheet links
+    for match in stylesheet_pattern.finditer(html_content):
+        url = match.group(2) or match.group(3)
+        if base_url:
+            url = urljoin(base_url, url)
+        links["stylesheets"].append(url)
+    
+    # Standardize all extracted URLs
+    for category in links:
+        links[category] = standardize_urls(links[category])
+        # Remove duplicates while preserving order
+        links[category] = list(dict.fromkeys(links[category]))
+    
+    return links
+
+
+def find_broken_links(urls: List[str], additional_checks: bool = False) -> List[Dict]:
+    """
+    Identify potentially broken links based on URL structure.
+    This doesn't actually make HTTP requests but checks for common issues.
+    
+    Args:
+        urls: List of URLs to check
+        additional_checks: Whether to perform additional validation checks
+    
+    Returns:
+        List of dictionaries containing problem URLs and issues
+    """
+    issues = []
+    
+    for url in urls:
+        if not url:
+            continue
+            
+        url_issues = []
+        
+        # Check for scheme
+        if not url.startswith(('http://', 'https://')):
+            url_issues.append("Missing or invalid scheme")
+        
+        # Check for malformed URLs
+        try:
+            parsed = urlparse(url)
+            if not parsed.netloc:
+                url_issues.append("Missing domain")
+        except Exception:
+            url_issues.append("Malformed URL")
+            
+        # Additional validation checks
+        if additional_checks:
+            # Check for unusual TLDs
+            if parsed.netloc and '.' in parsed.netloc:
+                tld = parsed.netloc.split('.')[-1].lower()
+                uncommon_tlds = ['xyz', 'tk', 'ml', 'ga', 'cf', 'gq']
+                if tld in uncommon_tlds:
+                    url_issues.append(f"Uncommon TLD (.{tld})")
+            
+            # Check for extremely long URLs (potential issue)
+            if len(url) > 2000:
+                url_issues.append("Extremely long URL")
+                
+            # Check for unusual characters in domain
+            if parsed.netloc and re.search(r'[^a-zA-Z0-9.-]', parsed.netloc):
+                url_issues.append("Unusual characters in domain")
+        
+        if url_issues:
+            issues.append({
+                "url": url,
+                "issues": url_issues
+            })
+    
+    return issues
+
+
+class TextCleaner:
+    """A class for text cleaning operations with optional word splitting and URL standardization."""
+
+    def __init__(self, split_methods=None, custom_stop_words=None, url_standardization_options=None):
         """
         Initialize the TextCleaner.
 
         Args:
             split_methods (list): List of word splitting methods to use
             custom_stop_words (set/list): Additional stopwords to remove
+            url_standardization_options (dict): Options for URL standardization
         """
         self.split_methods = split_methods
         self.stopwords = STOPWORDS.copy()
+        
+        # Default URL standardization options
+        self.url_standardization_options = {
+            'default_scheme': 'https',
+            'normalize_case': True,
+            'remove_fragments': True,
+            'remove_query_params': ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'],
+            'required_query_params': None,
+            'remove_trailing_slash': True,
+            'remove_www': True
+        }
+        
+        # Update with custom options if provided
+        if url_standardization_options:
+            self.url_standardization_options.update(url_standardization_options)
 
         if custom_stop_words:
             self.stopwords.update(custom_stop_words)
@@ -134,6 +386,62 @@ class TextCleaner:
 
         return text.strip()
 
+    def standardize_url(self, url):
+        """
+        Standardize a single URL using current standardization options.
+        
+        Args:
+            url (str): URL to standardize
+            
+        Returns:
+            str: Standardized URL
+        """
+        if not url or not isinstance(url, str):
+            return url
+            
+        return standardize_urls(url, **self.url_standardization_options)
+    
+    def standardize_url_batch(self, urls):
+        """
+        Standardize a batch of URLs using current standardization options.
+        
+        Args:
+            urls (list): List of URLs to standardize
+            
+        Returns:
+            list: List of standardized URLs
+        """
+        if not urls:
+            return []
+            
+        return standardize_urls(urls, **self.url_standardization_options)
+    
+    def extract_links(self, html_content, base_url=None):
+        """
+        Extract links from HTML content.
+        
+        Args:
+            html_content (str): HTML content
+            base_url (str): Base URL for resolving relative URLs
+            
+        Returns:
+            dict: Dictionary of categorized links
+        """
+        return extract_links_from_html(html_content, base_url)
+    
+    def check_links(self, urls, additional_checks=False):
+        """
+        Check for potentially broken links.
+        
+        Args:
+            urls (list): List of URLs to check
+            additional_checks (bool): Whether to perform additional validation
+            
+        Returns:
+            list: List of dictionaries with problem URLs and issues
+        """
+        return find_broken_links(urls, additional_checks)
+
     def process_with_nltk(self, texts, batch_size=1000):
         """
         Process a list of texts with NLTK for lemmatization and stopword removal.
@@ -156,7 +464,7 @@ class TextCleaner:
 
         logging.info(f"Processing {len(texts)} texts with NLTK")
 
-        # Without multiprocessing - use this as a fallback if needed
+
         if len(texts) < 1000:  # For small datasets, don't use multiprocessing
             processed_texts = []
             for text in texts:
@@ -166,8 +474,6 @@ class TextCleaner:
 
         try:
             # Try with multiprocessing
-
-
             # Create batches
             batches = []
             for i in range(0, len(texts), batch_size):
@@ -233,17 +539,19 @@ class TextCleaner:
         col_lower = col_name.lower()
         return any(indicator in col_lower for indicator in url_indicators)
     
-
-    def clean_dataframe(self, df, text_columns=None, exclude_columns=None,
-                        apply_nltk=True, standardize_datetimes=False, threshold=0.8, output_format="%Y-%m-%d %H:%M:%S"):
+    def clean_dataframe(self, df, text_columns=None, url_columns=None, exclude_columns=None,
+                      apply_nltk=True, standardize_urls=True, standardize_datetimes=True, 
+                      threshold=0.8, output_format="%Y-%m-%d %H:%M:%S"):
         """
-        Clean a DataFrame's text columns, and optionally standardize datetime columns.
+        Clean a DataFrame's text columns, standardize URLs, and optionally standardize datetime columns.
 
         Args:
             df (pd.DataFrame): DataFrame to clean
-            text_columns (list): List of columns to clean
+            text_columns (list): List of columns to clean as text
+            url_columns (list): List of columns to standardize as URLs
             exclude_columns (list): List of columns to exclude from cleaning
             apply_nltk (bool): Whether to apply NLTK processing
+            standardize_urls (bool): Whether to standardize URL columns
             standardize_datetimes (bool): Whether to detect and standardize datetime columns
             threshold (float): Fraction of successfully parsed values needed to consider a column as datetime
             output_format (str): The standardized datetime string format
@@ -254,49 +562,60 @@ class TextCleaner:
         # Create a copy to avoid modifying the original
         df_clean = df.copy()
 
-        if text_columns is None:
-            text_columns = [col for col in df_clean.columns if df_clean[col].dtype == 'object']
-
         if exclude_columns is None:
             exclude_columns = []
 
-        # Remove excluded columns from text_columns
-        text_columns = [col for col in text_columns if col not in exclude_columns]
+        # Auto-detect text columns if not provided
+        if text_columns is None:
+            text_columns = [col for col in df_clean.columns if df_clean[col].dtype == 'object']
+            # Remove excluded columns
+            text_columns = [col for col in text_columns if col not in exclude_columns]
 
-        # Identify URL columns to preserve
-        url_columns = [col for col in text_columns if self.is_url_column(col)]
+        # Auto-detect URL columns if not provided
+        if url_columns is None:
+            url_columns = [col for col in text_columns if self.is_url_column(col)]
+        else:
+            # Make sure URL columns are not in excluded columns
+            url_columns = [col for col in url_columns if col not in exclude_columns]
+
+        # Remove URL columns from text_columns to avoid double processing
         non_url_columns = [col for col in text_columns if col not in url_columns]
 
-        # Store original URL column values
-        url_columns_data = {col: df_clean[col].copy() for col in url_columns}
+        # Process URL columns
+        if standardize_urls and url_columns:
+            logging.info(f"Standardizing URL columns: {url_columns}")
+            for col in url_columns:
+                try:
+                    df_clean[col] = df_clean[col].astype(str)
+                    # Apply URL standardization function with current options
+                    df_clean[col] = df_clean[col].apply(self.standardize_url)
+                except Exception as e:
+                    logging.error(f"Error standardizing URLs in column {col}: {e}")
 
         # Process non-URL text columns
-        logging.info(f"Cleaning text columns: {non_url_columns}")
-        for col in non_url_columns:
-            try:
-                df_clean[col] = df_clean[col].astype(str)
-                df_clean[col] = df_clean[col].apply(self.clean_text)
-            except Exception as e:
-                logging.error(f"Error cleaning column {col}: {e}")
-
-        # Apply NLTK processing if requested
-        if apply_nltk and NLTK_AVAILABLE and non_url_columns:
+        if non_url_columns:
+            logging.info(f"Cleaning text columns: {non_url_columns}")
             for col in non_url_columns:
                 try:
-                    texts = df_clean[col].tolist()
-                    processed_texts = self.process_with_nltk(texts)
-                    if len(processed_texts) != len(texts):
-                        logging.error(f"Length mismatch in column {col}: original {len(texts)} vs processed {len(processed_texts)}")
-                        continue
-                    df_clean[col] = processed_texts
+                    df_clean[col] = df_clean[col].astype(str)
+                    df_clean[col] = df_clean[col].apply(self.clean_text)
                 except Exception as e:
-                    logging.error(f"Error applying NLTK to column {col}: {e}")
+                    logging.error(f"Error cleaning column {col}: {e}")
 
-        # Restore URL columns
-        for col, original_values in url_columns_data.items():
-            df_clean[col] = original_values
+            # Apply NLTK processing if requested
+            if apply_nltk and NLTK_AVAILABLE:
+                for col in non_url_columns:
+                    try:
+                        texts = df_clean[col].tolist()
+                        processed_texts = self.process_with_nltk(texts)
+                        if len(processed_texts) != len(texts):
+                            logging.error(f"Length mismatch in column {col}: original {len(texts)} vs processed {len(processed_texts)}")
+                            continue
+                        df_clean[col] = processed_texts
+                    except Exception as e:
+                        logging.error(f"Error applying NLTK to column {col}: {e}")
 
-        # Optional: Standardize datetime columns
+        # Standardize datetime columns
         if standardize_datetimes:
             try:
                 from datetime_processor import detect_and_standardize_datetimes_custom
@@ -310,5 +629,79 @@ class TextCleaner:
         df_clean.drop_duplicates(keep='first', inplace=True)
         df_clean.reset_index(drop=True, inplace=True)
 
-
         return df_clean
+    
+    def extract_and_clean_html_links(self, html_content, base_url=None):
+        """
+        Extract links from HTML content and standardize them.
+        
+        Args:
+            html_content (str): HTML content
+            base_url (str): Base URL for resolving relative URLs
+            
+        Returns:
+            dict: Dictionary of categorized and standardized links
+        """
+        # Extract links
+        links = self.extract_links(html_content, base_url)
+        
+        # Standardize links in each category
+        for category in links:
+            links[category] = self.standardize_url_batch(links[category])
+            
+        return links
+    
+    def html_link_report(self, df, html_column, base_url_column=None):
+        """
+        Generate a report of links found in HTML content.
+        
+        Args:
+            df (pd.DataFrame): DataFrame containing HTML content
+            html_column (str): Column name containing HTML content
+            base_url_column (str): Column name containing base URLs (optional)
+            
+        Returns:
+            pd.DataFrame: DataFrame with link report
+        """
+        import pandas as pd
+        
+        # Initialize empty lists for report data
+        row_indices = []
+        categories = []
+        urls = []
+        issues = []
+        
+        # Process each row
+        for idx, row in df.iterrows():
+            html = row[html_column]
+            base_url = row[base_url_column] if base_url_column else None
+            
+            # Extract links
+            link_dict = self.extract_and_clean_html_links(html, base_url)
+            
+            # Check for issues
+            for category, link_list in link_dict.items():
+                link_issues = self.check_links(link_list)
+                
+                # Add each link to the report
+                for link in link_list:
+                    row_indices.append(idx)
+                    categories.append(category)
+                    urls.append(link)
+                    
+                    # Find issues for this link
+                    link_issue = next((i for i in link_issues if i['url'] == link), None)
+                    if link_issue:
+                        issues.append(', '.join(link_issue['issues']))
+                    else:
+                        issues.append('')
+        
+        # Create report DataFrame
+        report = pd.DataFrame({
+            'row_index': row_indices,
+            'category': categories,
+            'url': urls,
+            'issues': issues
+        })
+        
+        return report

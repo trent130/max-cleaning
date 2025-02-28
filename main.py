@@ -23,7 +23,7 @@ os.makedirs(structured_dir, exist_ok=True)
 logging.info("Starting data cleaning process...")
 main_processor = DataProcessor(
     split_methods=['camel', 'snake', 'kebab', 'number', 'team_names'],
-    custom_stop_words=['etc', 'eg', 'ie']
+    custom_stop_words=['']
 )
 
 # Process all files for cleaning
