@@ -407,14 +407,14 @@ class CodeEmbeddedDataCleaner:
         return result_df
 
 
-# if __name__ == "__main__":
-#     cleaner = CodeEmbeddedDataCleaner()
-#     cleaned_df = cleaner.clean_tutorial_dataset(
-#         "tutorial_dataset.csv",
-#         text_columns=["description", "example_code"],
-#         output_path="cleaned_tutorial_dataset.csv"
-#     )
+if __name__ == "__main__":
+    cleaner = CodeEmbeddedDataCleaner()
+    cleaned_df = cleaner.clean_tutorial_dataset(
+        "/home/trent/Desktop/data-structuring/code_cleaner/javascript_tutorial_data.csv",
+        text_columns=["Subtopic", "Content"],
+        output_path="cleaned_javascript_tutorial_data.csv"
+    )
     
-#     if cleaned_df is not None:
-#         print("First few rows of cleaned data:")
-#         print(cleaned_df.head())
+    if cleaned_df is not None:
+        print("First few rows of cleaned data:")
+        print(cleaned_df.head())

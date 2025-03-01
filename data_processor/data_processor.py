@@ -10,7 +10,7 @@ class DataProcessor:
     """A class for loading, cleaning, and exporting data."""
     output_directory = "/home/trent/Desktop/data-structuring/data"
     
-    def __init__(self, split_methods=None, custom_stop_words=None):
+    def __init__(self, split_methods=None, custom_stop_words=None, ):
         """
         Initialize the DataProcessor(with the text cleaner class being initialized to be used inside the data processor class).
         
@@ -18,7 +18,13 @@ class DataProcessor:
             split_methods (list): List of word splitting methods to use
             custom_stop_words (set/list): Additional stopwords to remove
         """
-        self.cleaner = TextCleaner(split_methods, custom_stop_words)
+        self.cleaner = TextCleaner(
+        split_methods,
+        custom_stop_words,     
+        url_standardization_options={
+            'remove_query_params': ['utm_source', 'ref'],
+            'remove_fragments': True
+        })
     
     def load_data(self, file_path):
         """

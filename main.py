@@ -23,7 +23,7 @@ os.makedirs(structured_dir, exist_ok=True)
 logging.info("Starting data cleaning process...")
 main_processor = DataProcessor(
     split_methods=['camel', 'snake', 'kebab', 'number', 'team_names'],
-    custom_stop_words=['']
+    custom_stop_words=[''],
 )
 
 # Process all files for cleaning
@@ -33,7 +33,8 @@ main_processor.process_data_directory(
     exclude_columns=['id', 'timestamp', 'url'],  # Common columns to exclude from cleaning
     apply_nltk=True,
     dropna_threshold=0.3,
-    export_formats=['csv']
+    export_formats=['csv'],
+   # standardize_urls=True,
 )
 
 # Step 2: Structure the cleaned data

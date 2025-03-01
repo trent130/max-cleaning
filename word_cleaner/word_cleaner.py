@@ -9,12 +9,15 @@ import nltk
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
+# import pandas as pd
+from dateutil.parser import parse
 
 # Use multiprocessing to speed up processing
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 # Import the splitter functionality
 from word_splitter import general_word_splitter
+import pandas as pd
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO,
@@ -259,6 +262,49 @@ def extract_links_from_html(html_content: str, base_url: str = None) -> Dict[str
         links[category] = list(dict.fromkeys(links[category]))
     
     return links
+
+def standardize_datetime_in_text(text, output_format="%Y-%m-d %H:%M:%S"):
+    """
+    Find and standardize patterns within text
+    Args:
+        text (str): Text that has datetime patterns(probability)
+        output_format (str): Format for standardized datetime strings
+    
+    Returns:
+        str: Text with the standardized patterns
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    
+    # common datetime patterns
+    patterns = [
+        # ISO format(2025:3:1T03:50:30)
+        r'(\d{4}-\d{2}-\d{3}T\d{3}:\d{2}:\d{2})'
+        # common date formats(03-01-2025, 01-03-2025, 03.01.2025 )
+        r'(\d{1, 2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})'
+        # Month name formats(Mar 01, 2025, March 01, 2025
+        r'([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})'
+        # date with time 03/01/2025 03:57:34
+        r'(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}\s+\d{1,2}:\d{1,2}:\d{1,2})'
+        # others like Sartuday, March 01, 2025
+        r'([A-Za-z]+,\s+[A-Za-z]+\s+\d{1,2},\s+\d{4})'
+    ]
+
+    # standardize a single datetime match
+    def replace_match(match):
+        date_str = match.group(1)
+        try:
+            parsed_date = parse(date_str)
+            return match.group(0).replace(date_str, parsed_date.strftime(output_format))
+        except Exception as e:
+            return match.group(0)
+        
+    # process each pattern
+    result = text
+    for pattern in patterns:
+        result = re.sub(pattern, replace_match, result)
+    
+    return result
 
 
 def find_broken_links(urls: List[str], additional_checks: bool = False) -> List[Dict]:
@@ -541,9 +587,9 @@ class TextCleaner:
     
     def clean_dataframe(self, df, text_columns=None, url_columns=None, exclude_columns=None,
                       apply_nltk=True, standardize_urls=True, standardize_datetimes=True, 
-                      threshold=0.8, output_format="%Y-%m-%d %H:%M:%S"):
+                      threshold=0.8, output_format="%Y-%m-%d %H:%M:%S", preserve_datetime_text=True):
         """
-        Clean a DataFrame's text columns, standardize URLs, and optionally standardize datetime columns.
+        Clean a DataFrame's text columns, standardize URLs, and standardize datetime columns.
 
         Args:
             df (pd.DataFrame): DataFrame to clean
@@ -555,6 +601,7 @@ class TextCleaner:
             standardize_datetimes (bool): Whether to detect and standardize datetime columns
             threshold (float): Fraction of successfully parsed values needed to consider a column as datetime
             output_format (str): The standardized datetime string format
+            preserve_datetime_text (bool): whether to preserve sorrounding text when standardizing dates
 
         Returns:
             pd.DataFrame: Cleaned DataFrame
@@ -581,18 +628,46 @@ class TextCleaner:
         # Remove URL columns from text_columns to avoid double processing
         non_url_columns = [col for col in text_columns if col not in url_columns]
 
-        # Process URL columns
+        # step1: Process URL columns
         if standardize_urls and url_columns:
-            logging.info(f"Standardizing URL columns: {url_columns}")
+            logging.info(f"Standardizing URL columns {url_columns}")
             for col in url_columns:
                 try:
                     df_clean[col] = df_clean[col].astype(str)
-                    # Apply URL standardization function with current options
+                    
+                    # apply the standardizing
                     df_clean[col] = df_clean[col].apply(self.standardize_url)
                 except Exception as e:
-                    logging.error(f"Error standardizing URLs in column {col}: {e}")
+                    logging.error(f"Error standardizing URLs in column{col}: {e}")
 
-        # Process non-URL text columns
+        # step2: standardize datetime
+        if standardize_datetimes:
+            if preserve_datetime_text:
+                # first identify and replace datetime patterns within text
+                for col in non_url_columns:
+                    try:
+                        df_clean[col] = df_clean[col].apply(lambda x: standardize_datetime_in_text(x, output_format))
+                    except Exception as e:
+                        logging.error(f"Error standardizing datetime patterns in column {col} {e}")
+                    
+            else:
+                # use the existing detect_standardize_datetimes_custom_function
+                # threshold if met, the entire column is treated as datetime
+                try:
+                    from datetime_processor import detect_and_standardize_datetimes_custom
+                    df_clean = detect_and_standardize_datetimes_custom(
+                        df_clean,
+                        threshold=threshold,
+                        output_format=output_format
+                    )
+                    logging.info("Datetime columns standardized.")
+                except Exception as e:
+                    logging.error(f"Error standardizing datetime columns: {e}")
+
+        logging.info("Finished standardizing the datetimes in the dataset.")
+
+
+        # step3: Process non-URL text columns
         if non_url_columns:
             logging.info(f"Cleaning text columns: {non_url_columns}")
             for col in non_url_columns:
@@ -614,15 +689,6 @@ class TextCleaner:
                         df_clean[col] = processed_texts
                     except Exception as e:
                         logging.error(f"Error applying NLTK to column {col}: {e}")
-
-        # Standardize datetime columns
-        if standardize_datetimes:
-            try:
-                from datetime_processor import detect_and_standardize_datetimes_custom
-                df_clean = detect_and_standardize_datetimes_custom(df_clean, threshold=threshold, output_format=output_format)
-                logging.info("Datetime columns standardized.")
-            except Exception as e:
-                logging.error(f"Error standardizing datetime columns: {e}")
 
         # Final cleanup: drop rows with NaN, remove duplicates, and reset index
         df_clean.dropna(inplace=True)
@@ -663,7 +729,6 @@ class TextCleaner:
         Returns:
             pd.DataFrame: DataFrame with link report
         """
-        import pandas as pd
         
         # Initialize empty lists for report data
         row_indices = []
