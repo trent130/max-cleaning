@@ -59,20 +59,17 @@ for file_path in cleaned_files:
         url_columns = [col for col in text_columns if any(url_term in col.lower() 
                                                          for url_term in ['url', 'link', 'href', 'uri'])]
         
-        # Choose the first URL column if any exist
-        url_column = url_columns[0] if url_columns else None
-        
         # Generate a simple mapping (original column name to title case)
         columns_mapping = {col: col.replace('_', ' ').title() for col in df.columns}
         
         logging.info(f"Detected text columns: {text_columns}")
-        logging.info(f"Detected URL column: {url_column}")
+        logging.info(f"Detected URL columns: {url_columns}") # Updated logging
         
         # Structure this specific file using the static method
         structured_dataset = DataStructurer.load_and_clean_dataset(
             file_path,
             text_columns=text_columns,
-            url_column=url_column,
+            url_columns=url_columns,
             columns_mapping=columns_mapping
         )
         

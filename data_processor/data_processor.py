@@ -19,12 +19,7 @@ class DataProcessor:
             custom_stop_words (set/list): Additional stopwords to remove
         """
         self.cleaner = TextCleaner(
-        split_methods,
-        custom_stop_words,     
-        url_standardization_options={
-            'remove_query_params': ['utm_source', 'ref'],
-            'remove_fragments': True
-        })
+        split_methods,)
     
     def load_data(self, file_path):
         """
