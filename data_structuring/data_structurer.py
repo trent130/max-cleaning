@@ -1,7 +1,6 @@
 import pandas as pd
 import urllib.parse
 import os
-import ast
 import logging
 import glob
 

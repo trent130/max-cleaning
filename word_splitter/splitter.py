@@ -1,175 +1,150 @@
 import re
+from typing import Optional, List, Dict, Callable, Any
 
-# Precompile regex patterns for better performance
-CAMEL_CASE_PATTERN = re.compile(
-    r'(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])')
-NUMBER_TRANSITION_PATTERN = re.compile(
-    r'(?<=\d)(?=[A-Za-z])|(?<=[A-Za-z])(?=\d)')
-TEAM_NAME_THE_PATTERN = re.compile(r'the([A-Z][a-z]+)')
-ADJACENT_CAPS_PATTERN = re.compile(r'([A-Z][a-z]+)([A-Z][a-z]+)')
-PARENTHESES_SPACING_START = re.compile(r'([A-Za-z])\(')
-PARENTHESES_SPACING_END = re.compile(r'\)([A-Za-z])')
-HYPHENATED_DATES = re.compile(r'(\d+)-(\d+)')
-EXCESS_SPACES = re.compile(r'\s+')
-SPACE_BEFORE_PUNCT = re.compile(r'(\s)[,.!?]')
-SPECIAL_ABBREVIATIONS = re.compile(r'\b(49 ers)\b')
-PRESERVE_NUMERIC_TEAMS = re.compile(r'(\d+ers|\d+ERS)')
-SPECIAL_CHARS = re.compile(r'([*&])([A-Za-z])|([A-Za-z])([*&])')
-YEAR_RANGES = re.compile(r'\((\d{4})\s*–\s*(\d{4})\)')
+# Precompiled regex patterns for performance
+class RegexPatterns:
+    CAMEL_CASE = re.compile(r'(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])')
+    NUMBER_TRANSITION = re.compile(r'(?<=\d)(?=[A-Za-z])|(?<=[A-Za-z])(?=\d)')
+    TEAM_NAME_THE = re.compile(r'the([A-Z][a-z]+)')
+    ADJACENT_CAPS = re.compile(r'([A-Z][a-z]+)([A-Z][a-z]+)')
+    PARENTHESES_SPACING_START = re.compile(r'([A-Za-z])\(')
+    PARENTHESES_SPACING_END = re.compile(r'\)([A-Za-z])')
+    HYPHENATED_DATES = re.compile(r'(\d+)-(\d+)')
+    EXCESS_SPACES = re.compile(r'\s+')
+    SPACE_BEFORE_PUNCT = re.compile(r'(\s)[,.!?]')
+    SPECIAL_ABBREVIATIONS = re.compile(r'\b(49 ers)\b')
+    PRESERVE_NUMERIC_TEAMS = re.compile(r'(\d+ers|\d+ERS)')
+    # SPECIAL_CHARS = re.compile(r'([*&])([A-Za-z])|([A-Za-z])([*&])')
+    # YEAR_RANGES = re.compile(r'\((\d{4})\s*–\s*(\d{4})\)')
+    FLOATING_PUNCTUATION = re.compile(r'\s*([.,;:?!])\s*')
+    BRACKETS_WITH_NUMBERS = re.compile(r'\[\s*(\d+)\s*\]\s*:\s*(\d+)')
+    BRACKETS_SIMPLE = re.compile(r'\[\s*(\d+)\s*\]')
+    QUOTES_SPACING = re.compile(r'``\s*(.*?)\s*\'\'')
+    MULTI_DOTS = re.compile(r'\.{2,}')
+    LONELY_PARENS = re.compile(r'\(\s*\)')
+    MULTIPLE_DASHES = re.compile(r'-{2,}')
+    MULTIPLE_PUNCTUATIONS = re.compile(r"`{1,}")
+    STANDALONE_EQUALS = re.compile(r'\s*=+\s*')
+    STANDALONE_SYMBOLS = re.compile(r'\s+([.,;:?!])\s+')
+    BACKTICKS = re.compile(r'\s*`+\s*')
+    CARET = re.compile(r'\s*\^+\s*')
+    SEE_ALSO_SECTION = re.compile(r'===+\s*see also\s*===+', re.IGNORECASE)
+    REFERENCE_SECTION = re.compile(r'===+\s*reference\s*===+', re.IGNORECASE)
+    PUNCTUATIONS = re.compile(r"''")
+    CURRENCY_STANDARDIZER = re.compile(r'\$\s*([\d\s.]+)')
 
-# New patterns for cleaning problematic text
-FLOATING_PUNCTUATION = re.compile(r'\s*([.,;:?!])\s*')
-BRACKETS_WITH_NUMBERS = re.compile(r'\[\s*(\d+)\s*\]\s*:\s*(\d+)')
-BRACKETS_SIMPLE = re.compile(r'\[\s*(\d+)\s*\]')
-QUOTES_SPACING = re.compile(r'``\s*(.*?)\s*\'\'')
-MULTI_DOTS = re.compile(r'\.{2,}')
-LONELY_PARENS = re.compile(r'\(\s*\)')
-MULTIPLE_DASHES = re.compile(r'-{2,}')
-STANDALONE_EQUALS = re.compile(r'\s+=+\s+')
-STANDALONE_SYMBOLS = re.compile(r'\s+([.,;:?!])\s+')
+def _ensure_string(text: Any) -> Optional[str]:
+    """Ensure input is a string; return None if not."""
+    text = re.sub(r"``", '', text)
+    return text if isinstance(text, str) else None
 
+def split_camel_case(text: Any) -> Optional[str]:
+    """Split camelCase or PascalCase text into separate words.
 
-def split_camel_case(text):
+    Args:
+        text: Input text to process.
+
+    Returns:
+        Processed text with spaces, or original input if not a string.
     """
-    Split camelCase or PascalCase text into separate words.
-    """
-    if not isinstance(text, str):
+    text = _ensure_string(text)
+    return RegexPatterns.CAMEL_CASE.sub(' ', text) if text else text
+
+def split_snake_case(text: Any) -> Optional[str]:
+    """Split snake_case text into separate words."""
+    text = _ensure_string(text)
+    return text.replace('_', ' ') if text else text
+
+def split_kebab_case(text: Any) -> Optional[str]:
+    """Split kebab-case text into separate words."""
+    text = _ensure_string(text)
+    return text.replace('-', ' ') if text else text
+
+def split_number_transitions(text: Any) -> Optional[str]:
+    """Split transitions between numbers and letters, preserving special cases."""
+    text = _ensure_string(text)
+    if not text:
         return text
-    return CAMEL_CASE_PATTERN.sub(' ', text)
 
+    # Protected patterns (e.g., team names, common identifiers)
+    protected_patterns = {'49ers', '76ers', '3M', '7Eleven', '5G', '4K', '3D'}
+    replacements: Dict[str, str] = {}
+    working_text = text
 
-def split_snake_case(text):
-    """
-    Split snake_case text into separate words.
-    """
-    if not isinstance(text, str):
-        return text
-    return text.replace('_', ' ')
-
-
-def split_kebab_case(text):
-    """
-    Split kebab-case text into separate words.
-    """
-    if not isinstance(text, str):
-        return text
-    return text.replace('-', ' ')
-
-
-def split_number_transitions(text):
-    """
-    Split transitions between numbers and letters, preserving special cases.
-    """
-    if not isinstance(text, str):
-        return text
-
-    # First protect special numeric patterns we want to preserve (like team names)
-    protected_text = text
-
-    # Protect common team names and numeric identifiers
-    team_patterns = ['49ers', '76ers', '3M', '7Eleven', '5G', '4K', '3D']
-
-    # Create a dictionary to store replacements
-    replacements = {}
-
-    # Find and temporarily replace these patterns
-    for i, pattern in enumerate(team_patterns):
+    # Temporarily replace protected patterns
+    for i, pattern in enumerate(protected_patterns):
         placeholder = f"__PROTECTED_{i}__"
-        if pattern in protected_text:
+        if pattern in working_text:
             replacements[placeholder] = pattern
-            protected_text = protected_text.replace(pattern, placeholder)
+            working_text = working_text.replace(pattern, placeholder)
 
-    # Apply normal number splitting
-    protected_text = NUMBER_TRANSITION_PATTERN.sub(' ', protected_text)
+    # Apply number splitting
+    working_text = RegexPatterns.NUMBER_TRANSITION.sub('', working_text)
 
     # Restore protected patterns
     for placeholder, original in replacements.items():
-        protected_text = protected_text.replace(placeholder, original)
+        working_text = working_text.replace(placeholder, original)
 
-    return protected_text
+    return working_text
 
-
-def split_team_names(text):
-    """
-    Split patterns commonly found in team names.
-    """
-    if not isinstance(text, str):
+def split_team_names(text: Any) -> Optional[str]:
+    """Split patterns commonly found in team names."""
+    text = _ensure_string(text)
+    if not text:
         return text
-    result = text
-    # Pattern for "the" attached to capitalized words
-    result = TEAM_NAME_THE_PATTERN.sub(r'the \1', result)
-    # Pattern for adjacent capitalized words without spaces
-    result = ADJACENT_CAPS_PATTERN.sub(r'\1 \2', result)
-    return result
+    result = RegexPatterns.TEAM_NAME_THE.sub(r'the \1', text)
+    return RegexPatterns.ADJACENT_CAPS.sub(r'\1 \2', result)
 
-
-def clean_academic_references(text):
-    """
-    Clean academic reference patterns like [12]: 36
-    """
-    if not isinstance(text, str):
+def clean_academic_references(text: Any) -> Optional[str]:
+    """Clean academic reference patterns like '[12]: 36' or '[2]'."""
+    text = _ensure_string(text)
+    if not text:
         return text
+    text = RegexPatterns.BRACKETS_WITH_NUMBERS.sub(r' (Reference \1, p.\2) ', text)
+    return RegexPatterns.BRACKETS_SIMPLE.sub(r' (Reference \1) ', text)
 
-    # Clean complex bracket references like [12]: 36
-    text = BRACKETS_WITH_NUMBERS.sub(r' (Reference \1, p.\2) ', text)
-
-    # Clean simple bracket references like [2]
-    text = BRACKETS_SIMPLE.sub(r' (Reference \1) ', text)
-
-    return text
-
-
-def clean_punctuation(text):
-    """
-    Clean and normalize punctuation.
-    """
-    if not isinstance(text, str):
+def clean_punctuation(text: Any) -> Optional[str]:
+    """Clean and normalize punctuation in text."""
+    text = _ensure_string(text)
+    if not text:
         return text
-
-    # Fix quote spacing
-    text = QUOTES_SPACING.sub(r'"\1"', text)
-
-    # Fix floating punctuation
-    text = FLOATING_PUNCTUATION.sub(r'\1 ', text)
-
-    # Fix multiple dots
-    text = MULTI_DOTS.sub(r'.', text)
-
-    # Remove empty parentheses
-    text = LONELY_PARENS.sub(r'', text)
-
-    # Fix multiple dashes
-    text = MULTIPLE_DASHES.sub(r'-', text)
-
-    # Handle standalone equals signs (section separators)
-    text = STANDALONE_EQUALS.sub(r' Section: ', text)
-
-    # Fix standalone punctuation
-    text = STANDALONE_SYMBOLS.sub(r'\1 ', text)
-
-    return text
-
-
-def general_word_splitter(text, methods=None):
-    """
-    General-purpose function to split concatenated words using multiple methods.
     
+    text = RegexPatterns.SEE_ALSO_SECTION.sub(' See also ', text)
+    text = RegexPatterns.REFERENCE_SECTION.sub(' Reference ', text)
+    text = RegexPatterns.BACKTICKS.sub(' ', text)  
+    text = RegexPatterns.CARET.sub(' ', text)     
+    text = RegexPatterns.QUOTES_SPACING.sub(r'"\1"', text)
+    text = RegexPatterns.FLOATING_PUNCTUATION.sub(r'\1 ', text)
+    text = RegexPatterns.MULTI_DOTS.sub(r'.', text)
+    text = RegexPatterns.LONELY_PARENS.sub(r'', text)
+    text = RegexPatterns.MULTIPLE_DASHES.sub(r'-', text)
+    text = RegexPatterns.STANDALONE_EQUALS.sub(r'', text)
+    text = RegexPatterns.STANDALONE_SYMBOLS.sub(r'\1 ', text)
+    text = RegexPatterns.PUNCTUATIONS.sub(r"'", text)
+    text = RegexPatterns.MULTIPLE_PUNCTUATIONS.sub(' ', text)
+    text = RegexPatterns.CURRENCY_STANDARDIZER.sub(" dollar ", text)
+    return text
+
+def general_word_splitter(text: Any, methods: Optional[List[str]] = None) -> Optional[str]:
+    """General-purpose function to split concatenated words using multiple methods.
+
     Args:
-        text (str): The text to be processed
-        methods (list): List of methods to apply. Available options:
-            'camel', 'snake', 'kebab', 'number', 'team_names'
-            
+        text: The text to process.
+        methods: List of splitting methods to apply. Options: 'camel', 'snake', 'kebab',
+            'number', 'team_names'. If None, applies all.
+
     Returns:
-        str: Processed text with words properly split
+        Processed text with words split, or original input if not a string.
     """
-    if not isinstance(text, str):
+    text = _ensure_string(text)
+    if not text:
         return text
+    
+    text = re.sub('===', '', text)
+    default_methods = ['camel', 'snake', 'kebab', 'number', 'team_names']
+    methods = methods if methods is not None else default_methods
 
-    if methods is None:
-        methods = ['camel', 'snake', 'kebab', 'number', 'team_names']
-
-    # Performance optimization: Create a mapping of methods to functions
-    method_mapping = {
+    method_mapping: Dict[str, Callable[[str], Optional[str]]] = {
         'camel': split_camel_case,
         'snake': split_snake_case,
         'kebab': split_kebab_case,
@@ -178,101 +153,70 @@ def general_word_splitter(text, methods=None):
     }
 
     result = text
-
-    # Apply each method in sequence
+    result = clean_punctuation(result)
     for method in methods:
         if method in method_mapping:
-            result = method_mapping[method](result)
+            result = method_mapping[method](result) or result
+    return RegexPatterns.EXCESS_SPACES.sub(' ', result).strip()
+    
+def deep_text_cleaner(text: Any) -> Optional[str]:
+    """Deep cleaner for problematic academic text.
 
-    # Clean up extra spaces and normalize
-    return ' '.join(result.split())
+    Args:
+        text: Text to clean.
 
-
-def deep_text_cleaner(text):
+    Returns:
+        Cleaned text with proper formatting, or original input if not a string.
     """
-    Deep cleaner for problematic academic text like in the example.
-    """
-    if not isinstance(text, str):
+    text = _ensure_string(text)
+    if not text:
         return text
 
-    # Initial cleanup of excessive spaces
-    result = ' '.join(text.split())
-
-    # Clean academic references
+    result = RegexPatterns.EXCESS_SPACES.sub(' ', text).strip()
     result = clean_academic_references(result)
-
-    # Clean and normalize punctuation
     result = clean_punctuation(result)
 
-    # Make sure first letter of sentences is capitalized
+    # Capitalize first letter of sentences
     sentences = re.split(r'(?<=[.!?])\s+', result)
-    sentences = [s[0].upper() + s[1:] if s else s for s in sentences]
-    result = ' '.join(sentences)
+    result = ' '.join(s[0].upper() + s[1:] if s else s for s in sentences)
+    return RegexPatterns.EXCESS_SPACES.sub(' ', result).strip()
 
-    # Final cleanup of spacing
-    result = ' '.join(result.split())
+def football_text_cleaner(text: Any) -> Optional[str]:
+    """Specialized cleaner for football-related text with specific patterns.
 
-    return result
-
-
-def football_text_cleaner(text):
-    """
-    Specialized text cleaner for football datasets with specific patterns.
-    
     Args:
-        text (str): The football-related text to be cleaned
-        
+        text: Football text to clean.
+
     Returns:
-        str: Cleaned and normalized text with proper spacing
+        Cleaned and normalized football text.
     """
-    if not isinstance(text, str):
+    text = _ensure_string(text)
+    if not text:
         return text
 
-    # Apply general word splitting methods first
     result = general_word_splitter(text)
-
-    # Apply deep cleaning for problematic text
     result = deep_text_cleaner(result)
 
-    # Additional football-specific patterns
+    result = RegexPatterns.PARENTHESES_SPACING_START.sub(r'\1 (', result)
+    result = RegexPatterns.PARENTHESES_SPACING_END.sub(r') \1', result)
+    result = RegexPatterns.HYPHENATED_DATES.sub(r'\1 - \2', result)
+    result = RegexPatterns.EXCESS_SPACES.sub(' ', result)
+    result = RegexPatterns.SPACE_BEFORE_PUNCT.sub(r'\1', result)
+    result = RegexPatterns.SPECIAL_ABBREVIATIONS.sub('49ers', result)
+    result = RegexPatterns.PRESERVE_NUMERIC_TEAMS.sub(r'\1', result)
+    result = RegexPatterns.SPECIAL_CHARS.sub(
+    lambda m: f"{m.group(1) or m.group(3)} {m.group(2) or m.group(4)}", result)
+    result = RegexPatterns.YEAR_RANGES.sub(r'(\1-\2)', result)
+    return result.strip()
 
-    # Handle parentheses spacing
-    result = PARENTHESES_SPACING_START.sub(r'\1 (', result)
-    result = PARENTHESES_SPACING_END.sub(r') \1', result)
+def fix_messy_text(sample_text: Any) -> Optional[str]:
+    """Demonstrate fixing severely messy text.
 
-    # Handle hyphenated dates/ranges - keep hyphen but ensure spaces around it
-    result = HYPHENATED_DATES.sub(r'\1 - \2', result)
+    Args:
+        sample_text: Messy text to clean.
 
-    # Remove unnecessary symbols and excessive spaces
-    result = EXCESS_SPACES.sub(' ', result)  # Remove extra spaces
-    # Remove spaces before punctuation
-    result = SPACE_BEFORE_PUNCT.sub(r'\1', result)
-
-    # Handle special football abbreviations
-    result = SPECIAL_ABBREVIATIONS.sub('49ers', result)
-
-    # Preserve special team names with numbers
-    result = PRESERVE_NUMERIC_TEAMS.sub(r'\1', result)
-
-    # Handle special characters like asterisks
-    result = SPECIAL_CHARS.sub(
-        lambda m: f"{m.group(1) or m.group(3)} {m.group(2) or m.group(4)}", result)
-
-    # Standardize year ranges
-    result = YEAR_RANGES.sub(r'(\1-\2)', result)
-
-    # Clean up extra spaces and normalize
-    return ' '.join(result.split())
-
-
-def fix_messy_text(sample_text):
+    Returns:
+        Fully cleaned text.
     """
-    Example function to demonstrate fixing severely messy text like the provided example.
-    """
-    # First apply the general text cleaning
     cleaned = deep_text_cleaner(sample_text)
-
-    # Then apply the football-specific cleaning
-    cleaned = football_text_cleaner(cleaned)
-
-    return cleaned
+    return football_text_cleaner(cleaned) if cleaned else cleaned

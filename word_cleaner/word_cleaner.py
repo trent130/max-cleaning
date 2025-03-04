@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 import concurrent.futures
 import multiprocessing
 import psutil
-
 import pandas as pd
 
 # Initialize logging
@@ -25,7 +24,6 @@ try:
     from nltk.stem import WordNetLemmatizer
     from nltk.tokenize import word_tokenize
     from nltk.corpus import stopwords
-    # from nltk.metrics import edit_distance
 
     # Download necessary NLTK resources if not present
     @lru_cache(maxsize=1)
@@ -127,6 +125,7 @@ class CleanerConfig:
     language: str = 'english'
     split_methods: Optional[List[str]] = None
     custom_stop_words: Optional[Set[str]] = None
+    print(f"DataProcessor initialized with split_methods: {split_methods} and custom_stop_words: {custom_stop_words}")  
     url_standardization_options: Optional[Dict[str, Any]] = None
     processing_strategy: ProcessingStrategy = ProcessingStrategy.AUTO
     batch_size: int = 1000
@@ -157,6 +156,12 @@ class CleanerConfig:
             logger.setLevel(logging.DEBUG)
         else:
             logger.setLevel(logging.INFO)
+        
+        valid_split_methods = ['camel', 'snake', 'kebab', 'number', 'team_names']  # Replace with actual valid names
+        if self.split_methods:
+            for method in self.split_methods:
+                if method not in valid_split_methods:
+                    raise ValueError(f"Invalid split method: {method}")
 
 
 class NLTKManager:
@@ -510,6 +515,7 @@ class TextCleaner:
     def __init__(self, config=None):
         """Initialize the TextCleaner with optional configuration"""
         self.config = config or CleanerConfig()
+        print(f"TextCleaner config: {self.config}") 
         if isinstance(self.config, list):
             raise ValueError("Config must be a CleanerConfig object, not a list")
         self.nltk_manager = NLTKManager(self.config.language, self.config.custom_stop_words)

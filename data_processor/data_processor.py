@@ -18,15 +18,16 @@ class DataProcessor:
             split_methods (list): List of word splitting methods to use
             custom_stop_words (set/list): Additional stopwords to remove
         """
-    config = CleanerConfig(
-        language='english',
-        processing_strategy=ProcessingStrategy.AUTO,
-        verbose=True
-        # Add other config parameters as needed
-    )
+        config = CleanerConfig(
+            language='english',
+            split_methods=split_methods,
+            custom_stop_words=custom_stop_words,
+            processing_strategy=ProcessingStrategy.AUTO,
+            verbose=True
+        )
 
-    # Initialize TextCleaner with the config object
-    cleaner = TextCleaner(config)
+        # Initialize TextCleaner with the config object
+        self.cleaner = TextCleaner(config)
     
     def load_data(self, file_path):
         """
