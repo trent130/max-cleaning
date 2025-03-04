@@ -4,9 +4,9 @@ from functools import lru_cache, partial
 import time
 import urllib.parse
 from urllib.parse import urlparse, urljoin, urlunparse
-from typing import List, Dict, Union, Optional, Set, Any
+from typing import List, Dict, Optional, Set, Any
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import concurrent.futures
 import multiprocessing
 import psutil
@@ -25,7 +25,7 @@ try:
     from nltk.stem import WordNetLemmatizer
     from nltk.tokenize import word_tokenize
     from nltk.corpus import stopwords
-    from nltk.metrics import edit_distance
+    # from nltk.metrics import edit_distance
 
     # Download necessary NLTK resources if not present
     @lru_cache(maxsize=1)
@@ -134,6 +134,9 @@ class CleanerConfig:
     max_workers: Optional[int] = None  # Default to number of CPUs - 1
     cache_size: int = 10000  # Size of the LRU cache for text processing
     verbose: bool = False
+    datetime_format: str = TextCleanerConstants.DEFAULT_DATETIME_FORMAT 
+    datetime_threshold: float = 0.8  
+    datetime_patterns: List[str] = field(default_factory=lambda: TextCleanerConstants.DATETIME_PATTERNS)
     
     def __post_init__(self):
         # Set default URL options if none provided
@@ -423,113 +426,82 @@ class URLProcessor:
         return issues
 
 class DatetimeProcessor:
-    """Handles datetime standardization"""
+    """Handles datetime detection and standardization in both columns and inside text fields."""
     
-    def __init__(self, output_format=TextCleanerConstants.DEFAULT_DATETIME_FORMAT, threshold=0.8):
-        self.output_format = output_format
-        self.threshold = threshold
-        self.patterns = TextCleanerConstants.DATETIME_PATTERNS
-        self.is_dateutil_available = DATEUTIL_AVAILABLE  # Avoid repeated checks
+    def __init__(self, config: CleanerConfig):
+        self.output_format = config.datetime_format
+        self.threshold = config.datetime_threshold
+        self.patterns = config.datetime_patterns  # Use patterns from CleanerConfig
 
-    def is_available(self):
-        """Check if dateutil is available (cached result)."""
-        return self.is_dateutil_available
-        
-    @lru_cache(maxsize=1024)
-    def safe_parse(self, x):
-        """Try to parse a datetime string. Return pd.NaT if it fails."""
-        if not DATEUTIL_AVAILABLE:  # Avoid import if not available
-            return pd.NaT
-        
-        try:
-            return dateutil_parse(x)
-        except Exception:
-            return pd.NaT
-            
+    def standardize_datetime_column(self, series):
+        """Standardize a datetime column"""
+        parsed_series = pd.to_datetime(series, errors='coerce')
+        return parsed_series.dt.strftime(self.output_format).fillna('')
+    
+    def detect_datetime_column(self, series):
+        """Detect if a column contains datetime values based on a threshold."""
+        if series.empty or not pd.api.types.is_string_dtype(series):
+            return False
+
+        # Sample a limited number of rows for efficiency
+        sample_size = min(len(series), 1000)
+        sample = series.dropna().sample(sample_size, random_state=42)
+
+        # Convert values to datetime, setting errors='coerce' to convert invalid values to NaT
+        parsed_sample = pd.to_datetime(sample, errors='coerce')
+
+        # Calculate percentage of valid datetime values
+        valid_percentage = parsed_sample.notna().sum() / sample_size
+
+        return valid_percentage >= self.threshold
+
     def standardize_datetime_in_text(self, text):
-        """Find and standardize datetime patterns within text"""
-        if not self.is_available() or not isinstance(text, str) or not text:
-            return text
-            
-        if not DATEUTIL_AVAILABLE:  # Avoid import if not available
+        """Find and standardize datetime patterns inside text content."""
+        if not isinstance(text, str) or not text.strip():
             return text
         
-        # Standardize a single datetime match
         def replace_match(match):
             date_str = match.group(1)
             try:
                 parsed_date = dateutil_parse(date_str)
-                return match.group(0).replace(date_str, parsed_date.strftime(self.output_format))
+                return parsed_date.strftime(self.output_format)
             except Exception:
-                return match.group(0)
-            
-        # Process each pattern
-        result = text
+                return date_str  # Return original if parsing fails
+        
         for pattern in self.patterns:
-            result = re.sub(pattern, replace_match, result)
+            text = re.sub(pattern, replace_match, text)
         
-        return result
-    
-    def detect_datetime_column(self, series, threshold):
-        """Detect if a column contains datetime values"""
-        if not self.is_available():
-            return False
-            
-        # Skip if series is empty or not string type
-        if series.empty or not pd.api.types.is_string_dtype(series):
-            return False
+        return text
 
-        # Avoid parsing the entire series if possible
-        sample_size = min(len(series), 1000)  # Limit sample size for performance
-        sample = series.sample(sample_size, random_state=42)  # Consistent sampling
-
-        # Apply the safe parser to the sample
-        parsed_sample = sample.apply(self.safe_parse)
-        valid_count = parsed_sample.notna().sum()
-
-        # Calculate percentage of valid datetime values
-        valid_percentage = valid_count / sample_size
-
-        # Return True if threshold is met
-        return valid_percentage >= threshold
-
-
-    def standardize_datetime_column(self, series):
-        """Standardize a datetime column"""
-        if not self.is_available():
-            return series
-            
-        # Apply safe parsing
-        parsed_series = series.apply(self.safe_parse)
-        
-        # Format to string, handling NaT values
-        return parsed_series.dt.strftime(self.output_format).fillna('')
-    
-    def detect_and_standardize_datetimes(self, df, threshold):
+    def detect_and_standardize_datetimes(self, df, text_columns=None):
         """
-        Detect columns that contain datetime-like values and standardize them.
+        Detect datetime columns and also process datetime values embedded in text content.
         
-        Parameters:
-        df (pd.DataFrame): The input DataFrame.
-        
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+            text_columns (list): List of columns to search for datetime inside text.
+            
         Returns:
-        pd.DataFrame: A DataFrame where datetime-like columns have been standardized.
+            pd.DataFrame: DataFrame with datetime fields and text-based datetime values standardized.
         """
-        if not self.is_available():
-            logger.warning("dateutil not available - datetime processing skipped")
-            return df
-            
         new_df = df.copy()
-        
-        # Process each column
+
+        # Step 1: Detect & Standardize Date Columns
         for col in new_df.columns:
             if new_df[col].dtype == 'object' or pd.api.types.is_string_dtype(new_df[col]):
-                if self.detect_datetime_column(new_df[col], threshold):
+                if self.detect_datetime_column(new_df[col]):
                     logger.info(f"Column '{col}' detected as datetime and will be standardized")
                     new_df[col] = self.standardize_datetime_column(new_df[col])
                 else:
                     logger.debug(f"Column '{col}' not detected as datetime")
-                    
+
+        # Step 2: Standardize Datetime Inside Text Columns
+        if text_columns:
+            for col in text_columns:
+                if col in new_df.columns and pd.api.types.is_string_dtype(new_df[col]):
+                    logger.info(f"Checking '{col}' for embedded datetime values")
+                    new_df[col] = new_df[col].apply(self.standardize_datetime_in_text)
+        
         return new_df
 
 class TextCleaner:
@@ -542,7 +514,7 @@ class TextCleaner:
             raise ValueError("Config must be a CleanerConfig object, not a list")
         self.nltk_manager = NLTKManager(self.config.language, self.config.custom_stop_words)
         self.url_processor = URLProcessor(self.config.url_standardization_options)
-        self.datetime_processor = DatetimeProcessor()
+        self.datetime_processor = DatetimeProcessor(self.config)
         self.memory_monitor = MemoryMonitor(self.config.memory_limit_percentage)
         
         # Set up LRU cache for text cleaning
