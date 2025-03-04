@@ -435,7 +435,7 @@ class DatetimeProcessor:
 
     def standardize_datetime_column(self, series):
         """Standardize a datetime column"""
-        parsed_series = pd.to_datetime(series, errors='coerce')
+        parsed_series = pd.to_datetime(series,format=self.output_format, errors='coerce')
         return parsed_series.dt.strftime(self.output_format).fillna('')
     
     def detect_datetime_column(self, series):
@@ -448,7 +448,7 @@ class DatetimeProcessor:
         sample = series.dropna().sample(sample_size, random_state=42)
 
         # Convert values to datetime, setting errors='coerce' to convert invalid values to NaT
-        parsed_sample = pd.to_datetime(sample, errors='coerce')
+        parsed_sample = pd.to_datetime(sample, format=self.output_format, errors='coerce')
 
         # Calculate percentage of valid datetime values
         valid_percentage = parsed_sample.notna().sum() / sample_size

@@ -1,4 +1,4 @@
-# TextCleaner: A Robust Data Preprocessing Toolkit
+# MaxCleaner: A Robust Data Preprocessing Toolkit
 
 ## Overview
 
