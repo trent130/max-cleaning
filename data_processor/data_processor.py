@@ -121,8 +121,6 @@ class DataProcessor:
         df_cleaned = self.cleaner.process_dataframe(
             df, 
             text_columns=text_columns,
-            exclude_columns=exclude_columns,
-            apply_nltk=apply_nltk
         )
 
         if df_cleaned is not None:

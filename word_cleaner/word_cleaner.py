@@ -1,13 +1,12 @@
 import re
 import logging
-from functools import lru_cache
+from functools import lru_cache, partial
 import time
 import urllib.parse
 from urllib.parse import urlparse, urljoin, urlunparse
 from typing import List, Dict, Union, Optional, Set, Any
 from enum import Enum
 from dataclasses import dataclass
-import functools
 import concurrent.futures
 import multiprocessing
 import psutil
@@ -20,72 +19,63 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 # nltk importation
+NLTK_AVAILABLE = False
 try:
     import nltk
     from nltk.stem import WordNetLemmatizer
     from nltk.tokenize import word_tokenize
     from nltk.corpus import stopwords
     from nltk.metrics import edit_distance
-    NLTK_AVAILABLE = True
 
     # Download necessary NLTK resources if not present
     @lru_cache(maxsize=1)
-    def ensure_nltk_resources():
+    def _ensure_nltk_resource(resource):
         try:
-            nltk.data.find('tokenizers/punkt')
+            nltk.data.find(resource)
         except LookupError:
-            nltk.download('punkt', quiet=True)
+            logger.info(f"Downloading NLTK resource: {resource}")
+            nltk.download(resource, quiet=True)
 
-        try:
-            nltk.data.find('corpora/stopwords')
-        except LookupError:
-            nltk.download('stopwords', quiet=True)
-
-        try:
-            nltk.data.find('corpora/wordnet')
-        except LookupError:
-            nltk.download('wordnet', quiet=True)
+    def ensure_nltk_resources(resources=('punkt', 'stopwords', 'wordnet')):
+        """Ensures multiple NLTK resources are available."""
+        for resource in resources:
+            if resource == 'punkt':
+                _ensure_nltk_resource('tokenizers/punkt')
+            elif resource.startswith('corpora/'):
+                _ensure_nltk_resource(resource)
+            else:
+                _ensure_nltk_resource(f'corpora/{resource}')
 
     ensure_nltk_resources()
 
     STOPWORDS = set(stopwords.words('english'))
     lemmatizer = WordNetLemmatizer()
+    NLTK_AVAILABLE = True
 
 except ImportError:
-    NLTK_AVAILABLE = False
     logger.warning(
         "NLTK not available. Some advanced features will be disabled.")
     STOPWORDS = set()
+
+DATEUTIL_AVAILABLE = False
 try:
     from dateutil.parser import parse as dateutil_parse
     DATEUTIL_AVAILABLE = True
 except ImportError:
-    DATEUTIL_AVAILABLE = False
     logger.warning("dateutil not available. Datetime features will be disabled.")
 
+WORD_SPLITTER_AVAILABLE = False
 try:
-    # Import the splitter functionality
     from word_splitter import general_word_splitter
     WORD_SPLITTER_AVAILABLE = True
 except ImportError:
-    WORD_SPLITTER_AVAILABLE = False
     logger.warning(
         "Word splitter module not available. Some of the splitting functionalities wont be available ..."
     )
+
 # Define constants
 class TextCleanerConstants:
-    # Regex patterns 
-    PATTERNS = {
-        'non_ascii': re.compile(r"[^\x00-\x7F]+"),
-        'extra_space': re.compile(r"\s+"),
-        'single_char': re.compile(r"\b[A-Za-z]\b"),
-        'sentence_end': re.compile(r"([.?!])\s+(?=[A-Z])"),
-        'punctuation_space': re.compile(r"([.,?!])(?! )"),
-        'url': re.compile(r'https?://\S+|www\.\S+'),
-        'email': re.compile(r'[\w\.-]+@[\w\.-]+\.\w+'),
-        'number': re.compile(r'\b\d+\b'),
-    }
-
+    # Regex patterns
     NON_ASCII_RE = re.compile(r"[^\x00-\x7F]+")
     EXTRA_SPACE_RE = re.compile(r"\s+")
     SINGLE_CHAR_RE = re.compile(r"\b[A-Za-z]\b")
@@ -108,8 +98,6 @@ class TextCleanerConstants:
         'remove_trailing_slash': True,
         'remove_www': True
     }
-    
-    DEFAULT_URL_OPTIONS = URL_OPTIONS.copy()  # Create a copy
 
     # Datetime constants
     DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -167,56 +155,34 @@ class CleanerConfig:
         else:
             logger.setLevel(logging.INFO)
 
-           
+
 class NLTKManager:
     """Manages NLTK resources and processing"""
     
-    @classmethod
-    @functools.lru_cache(maxsize=1)
-    def initialize_resources(cls, required_resources=None):
-        """Initialize NLTK resources once across the application"""
-        if not NLTK_AVAILABLE:
-            return False
-            
-        resources = required_resources or ['punkt', 'stopwords', 'wordnet']
-        for resource in resources:
-            try:
-                if resource == 'punkt':
-                    nltk.data.find('tokenizers/punkt')
-                elif resource.startswith('corpora/'):
-                    nltk.data.find(resource)
-                else:
-                    nltk.data.find(f'corpora/{resource}')
-            except LookupError:
-                logger.info(f"Downloading NLTK resource: {resource}")
-                nltk.download(resource, quiet=True)
-        
-        return True
-        
     def __init__(self, language='english', custom_stop_words=None):
+        if not NLTK_AVAILABLE:
+            self.stopwords = set()
+            self.lemmatizer = None
+            return
+        
         self.language = language
         self.custom_stop_words = custom_stop_words or set()
-        self.stopwords = set()
-        self.lemmatizer = None
-        
-        if NLTK_AVAILABLE:
-            self.initialize_resources()
-            self._setup_language_resources()
-    
-    def _setup_language_resources(self):
-        """Setup language-specific resources"""
-        try:
-            self.stopwords = set(stopwords.words(self.language))
-            if self.custom_stop_words:
-                self.stopwords.update(self.custom_stop_words)
-        except Exception as e:
-            logger.warning(f"Error loading stopwords for '{self.language}': {e}")
-            # Fallback to English
-            self.stopwords = set(stopwords.words('english'))
-            if self.custom_stop_words:
-                self.stopwords.update(self.custom_stop_words)
-            
+        self.stopwords = self._load_stopwords()  # Load stopwords only once
         self.lemmatizer = WordNetLemmatizer()
+
+    @lru_cache(maxsize=1)
+    def _load_stopwords(self):
+        """Load stopwords for the given language (cached)."""
+        try:
+            stopwords_set = set(stopwords.words(self.language))
+        except Exception as e:
+            logger.warning(f"Error loading stopwords for '{self.language}': {e}. Falling back to English.")
+            stopwords_set = set(stopwords.words('english'))  # Fallback to English
+        
+        if self.custom_stop_words:
+            stopwords_set.update(self.custom_stop_words)
+        
+        return stopwords_set
 
     def process_text(self, text):
         """Tokenize, remove stopwords, and lemmatize text using NLTK."""
@@ -226,11 +192,12 @@ class NLTKManager:
         try:
             words = word_tokenize(text)
             words = [w for w in words if w not in self.stopwords]
-            words = [lemmatizer.lemmatize(w) for w in words]
+            words = [self.lemmatizer.lemmatize(w) for w in words]
             return ' '.join(words)
         except Exception as e:
             logger.warning(f"Error processing text with NLTK: {e}")
             return text
+
 
 class MemoryMonitor:
     """Monitors memory usage during processing"""
@@ -250,13 +217,18 @@ class MemoryMonitor:
                    f"Available: {memory.available / 1024**3:.1f} GB)")
 
 
-
 class URLProcessor:
     """Handles URL standardization and validation"""
     
     def __init__(self, options=None):
         self.options = options or TextCleanerConstants.URL_OPTIONS.copy()
-        
+    
+    @staticmethod
+    @lru_cache(maxsize=1024)  # Cache URL parsing for efficiency
+    def _parse_url(url):
+        """Cached URL parsing to reduce redundant calculations."""
+        return urlparse(url)
+
     def standardize_url(self, url):
         """Standardize a single URL"""
         if not url or not isinstance(url, str):
@@ -274,7 +246,7 @@ class URLProcessor:
                 
         try:
             # Parse the URL
-            parsed = urlparse(url)
+            parsed = self._parse_url(url)
             
             # Skip empty URLs
             if not parsed.netloc and not parsed.path:
@@ -293,9 +265,9 @@ class URLProcessor:
                 remove_query_params = self.options.get('remove_query_params')
                 required_query_params = self.options.get('required_query_params')
                 
+                query_dict = dict(urllib.parse.parse_qsl(parsed.query))
+                
                 if remove_query_params is True or isinstance(remove_query_params, list):
-                    query_dict = dict(urllib.parse.parse_qsl(parsed.query))
-                    
                     if isinstance(remove_query_params, list):
                         # Remove specific query parameters
                         for param in remove_query_params:
@@ -419,7 +391,7 @@ class URLProcessor:
             
             # Check for malformed URLs
             try:
-                parsed = urlparse(url)
+                parsed = self._parse_url(url)
                 if not parsed.netloc:
                     url_issues.append("Missing domain")
             except Exception:
@@ -457,19 +429,19 @@ class DatetimeProcessor:
         self.output_format = output_format
         self.threshold = threshold
         self.patterns = TextCleanerConstants.DATETIME_PATTERNS
-        
+        self.is_dateutil_available = DATEUTIL_AVAILABLE  # Avoid repeated checks
+
     def is_available(self):
-        """Check if dateutil is available"""
-        try:
-            import dateutil.parser
-            return True
-        except ImportError:
-            return False
+        """Check if dateutil is available (cached result)."""
+        return self.is_dateutil_available
         
+    @lru_cache(maxsize=1024)
     def safe_parse(self, x):
         """Try to parse a datetime string. Return pd.NaT if it fails."""
+        if not DATEUTIL_AVAILABLE:  # Avoid import if not available
+            return pd.NaT
+        
         try:
-            from dateutil.parser import parse as dateutil_parse
             return dateutil_parse(x)
         except Exception:
             return pd.NaT
@@ -479,7 +451,8 @@ class DatetimeProcessor:
         if not self.is_available() or not isinstance(text, str) or not text:
             return text
             
-        from dateutil.parser import parse as dateutil_parse
+        if not DATEUTIL_AVAILABLE:  # Avoid import if not available
+            return text
         
         # Standardize a single datetime match
         def replace_match(match):
@@ -497,7 +470,7 @@ class DatetimeProcessor:
         
         return result
     
-    def detect_datetime_column(self, series):
+    def detect_datetime_column(self, series, threshold):
         """Detect if a column contains datetime values"""
         if not self.is_available():
             return False
@@ -505,15 +478,22 @@ class DatetimeProcessor:
         # Skip if series is empty or not string type
         if series.empty or not pd.api.types.is_string_dtype(series):
             return False
-        
-        # Apply the safe parser to each value
-        parsed_series = series.apply(self.safe_parse)
-        valid_count = parsed_series.notna().sum()
-        total_count = len(parsed_series)
-        
+
+        # Avoid parsing the entire series if possible
+        sample_size = min(len(series), 1000)  # Limit sample size for performance
+        sample = series.sample(sample_size, random_state=42)  # Consistent sampling
+
+        # Apply the safe parser to the sample
+        parsed_sample = sample.apply(self.safe_parse)
+        valid_count = parsed_sample.notna().sum()
+
+        # Calculate percentage of valid datetime values
+        valid_percentage = valid_count / sample_size
+
         # Return True if threshold is met
-        return total_count > 0 and (valid_count / total_count) >= self.threshold
-    
+        return valid_percentage >= threshold
+
+
     def standardize_datetime_column(self, series):
         """Standardize a datetime column"""
         if not self.is_available():
@@ -522,10 +502,10 @@ class DatetimeProcessor:
         # Apply safe parsing
         parsed_series = series.apply(self.safe_parse)
         
-        # Format to string
-        return parsed_series.dt.strftime(self.output_format)
+        # Format to string, handling NaT values
+        return parsed_series.dt.strftime(self.output_format).fillna('')
     
-    def detect_and_standardize_datetimes(self, df):
+    def detect_and_standardize_datetimes(self, df, threshold):
         """
         Detect columns that contain datetime-like values and standardize them.
         
@@ -544,14 +524,13 @@ class DatetimeProcessor:
         # Process each column
         for col in new_df.columns:
             if new_df[col].dtype == 'object' or pd.api.types.is_string_dtype(new_df[col]):
-                if self.detect_datetime_column(new_df[col]):
+                if self.detect_datetime_column(new_df[col], threshold):
                     logger.info(f"Column '{col}' detected as datetime and will be standardized")
                     new_df[col] = self.standardize_datetime_column(new_df[col])
                 else:
                     logger.debug(f"Column '{col}' not detected as datetime")
                     
         return new_df
-
 
 class TextCleaner:
     """Enhanced text cleaner for data preprocessing"""
@@ -567,7 +546,7 @@ class TextCleaner:
         self.memory_monitor = MemoryMonitor(self.config.memory_limit_percentage)
         
         # Set up LRU cache for text cleaning
-        self.clean_text_cached = functools.lru_cache(maxsize=self.config.cache_size)(self._clean_text_impl)
+        self.clean_text_cached = lru_cache(maxsize=self.config.cache_size)(self._clean_text_impl)
         
         logger.info(f"TextCleaner initialized with {self.config.language} language support")
         logger.info(f"Processing strategy: {self.config.processing_strategy.value}")
@@ -639,123 +618,99 @@ class TextCleaner:
         elif self.config.verbose:
             self.memory_monitor.log_memory_usage()
         return limit_exceeded
-        
+    
+    def _process_single_text(self, text, apply_nltk):
+        """Clean and optionally apply NLTK to a single text."""
+        cleaned = self.clean_text(text)
+        if apply_nltk and NLTK_AVAILABLE:
+            cleaned = self.process_with_nltk(cleaned)
+        return cleaned
+
     def process_text_batch(self, texts, apply_nltk=True):
-        """Process a batch of texts with multiprocessing"""
+        """Process a batch of texts with chosen strategy."""
         if not texts:
             return []
             
         logger.info(f"Processing {len(texts)} texts")
         
-        # Determine processing strategy
         strategy = self.config.processing_strategy
         if strategy == ProcessingStrategy.AUTO:
-            # Choose strategy based on input size and system resources
-            if len(texts) < 1000:
-                strategy = ProcessingStrategy.SEQUENTIAL
-            else:
-                strategy = ProcessingStrategy.MULTIPROCESSING
+            strategy = ProcessingStrategy.MULTIPROCESSING if len(texts) >= 1000 else ProcessingStrategy.SEQUENTIAL
                 
-        # Apply text cleaning
-        cleaned_texts = []
-        
         if strategy == ProcessingStrategy.SEQUENTIAL:
             logger.info("Using sequential processing")
-            start_time = time.time()
-            
-            for i, text in enumerate(texts):
-                # Check memory usage periodically
-                if i % 1000 == 0 and self._check_memory_usage():
-                    logger.warning("Processing aborted due to high memory usage")
-                    break
-                    
-                # Clean text
-                cleaned = self.clean_text(text)
-                
-                # Apply NLTK if requested
-                if apply_nltk and NLTK_AVAILABLE:
-                    cleaned = self.process_with_nltk(cleaned)
-                    
-                cleaned_texts.append(cleaned)
-                
-                # Log progress
-                if i % 1000 == 0 and i > 0:
-                    elapsed = time.time() - start_time
-                    progress = min(100, (i + 1) / len(texts) * 100)
-                    logger.info(f"Processed {progress:.1f}% ({i + 1}/{len(texts)}) in {elapsed:.1f}s")
-                    
-            logger.info(f"Sequential processing completed in {time.time() - start_time:.1f}s")
-            
+            return self._process_text_sequential(texts, apply_nltk)
         elif strategy == ProcessingStrategy.MULTIPROCESSING:
             logger.info(f"Using multiprocessing with {self.config.max_workers} workers")
-            
-            # Create batches
-            batches = []
-            batch_size = self.config.batch_size
-            for i in range(0, len(texts), batch_size):
-                batches.append(texts[i:i+batch_size])
-                
-            logger.info(f"Split {len(texts)} texts into {len(batches)} batches")
-            
-            # Process batches in parallel
-            with concurrent.futures.ProcessPoolExecutor(max_workers=self.config.max_workers) as executor:
-                # First clean all texts
-                future_to_batch = {executor.submit(self._process_batch, batch, apply_nltk): i 
-                                  for i, batch in enumerate(batches)}
-                
-                # Collect results as they complete
-                start_time = time.time()
-                completed = 0
-                
-                for future in concurrent.futures.as_completed(future_to_batch):
-                    batch_idx = future_to_batch[future]
-                    try:
-                        # Check memory usage
-                        if self._check_memory_usage():
-                            logger.warning("Processing aborted due to high memory usage")
-                            executor.shutdown(wait=False)
-                            break
-                            
-                        # Get batch results
-                        result = future.result()
-                        cleaned_texts.extend(result)
-                        
-                        # Update progress
-                        completed += 1
-                        progress = min(100, completed / len(batches) * 100)
-                        elapsed = time.time() - start_time
-                        logger.info(f"Completed batch {batch_idx+1}/{len(batches)} ({progress:.1f}%) in {elapsed:.1f}s")
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing batch {batch_idx}: {e}")
-                        
-            logger.info(f"Multiprocessing completed in {time.time() - start_time:.1f}s")
-            
+            return self._process_text_multiprocessing(texts, apply_nltk)
         elif strategy == ProcessingStrategy.VECTORIZE:
             logger.info("Using vectorized processing")
+            return self._process_text_vectorized(texts, apply_nltk)
+        else:
+            raise ValueError(f"Invalid processing strategy: {strategy}")
 
-            # Convert to pandas Series for easier vectorized operations
-            series = pd.Series(texts)
+    def _process_text_sequential(self, texts, apply_nltk):
+        """Sequential processing of texts."""
+        start_time = time.time()
+        cleaned_texts = []
+        for i, text in enumerate(texts):
+            if i % 1000 == 0 and self._check_memory_usage():
+                logger.warning("Processing aborted due to high memory usage")
+                break
+            cleaned_texts.append(self._process_single_text(text, apply_nltk))
+            if i % 1000 == 0 and i > 0:
+                elapsed = time.time() - start_time
+                progress = min(100, (i + 1) / len(texts) * 100)
+                logger.info(f"Processed {progress:.1f}% ({i + 1}/{len(texts)}) in {elapsed:.1f}s")
+        logger.info(f"Sequential processing completed in {time.time() - start_time:.1f}s")
+        return cleaned_texts
 
-            # Clean text using the cached cleaning function
-            cleaned_series = series.apply(self.clean_text)
+    def _process_text_multiprocessing(self, texts, apply_nltk):
+        """Multiprocessing of texts."""
+        start_time = time.time()
+        cleaned_texts = []
+        batch_size = self.config.batch_size
+        batches = [texts[i:i+batch_size] for i in range(0, len(texts), batch_size)]
+        logger.info(f"Split {len(texts)} texts into {len(batches)} batches")
 
-            # Apply NLTK if requested
-            if apply_nltk and NLTK_AVAILABLE:
-                cleaned_series = cleaned_series.apply(self.process_with_nltk)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self.config.max_workers) as executor:
+            # Use partial to pass apply_nltk to the worker function
+            func = partial(self._process_batch, apply_nltk=apply_nltk)
+            future_to_batch = {executor.submit(func, batch): i for i, batch in enumerate(batches)}
 
-            cleaned_texts = cleaned_series.tolist()
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_batch):
+                batch_idx = future_to_batch[future]
+                try:
+                    if self._check_memory_usage():
+                        logger.warning("Processing aborted due to high memory usage")
+                        executor.shutdown(wait=False)
+                        break
+                    result = future.result()
+                    cleaned_texts.extend(result)
+                    completed += 1
+                    progress = min(100, completed / len(batches) * 100)
+                    elapsed = time.time() - start_time
+                    logger.info(f"Completed batch {batch_idx+1}/{len(batches)} ({progress:.1f}%) in {elapsed:.1f}s")
+                except Exception as e:
+                    logger.error(f"Error processing batch {batch_idx}: {e}")
+        logger.info(f"Multiprocessing completed in {time.time() - start_time:.1f}s")
+        return cleaned_texts
 
+    def _process_text_vectorized(self, texts, apply_nltk):
+        """Vectorized processing of texts using pandas."""
+        start_time = time.time()
+        series = pd.Series(texts)
+        cleaned_series = series.apply(self.clean_text)
+        if apply_nltk and NLTK_AVAILABLE:
+            cleaned_series = cleaned_series.apply(self.process_with_nltk)
+        cleaned_texts = cleaned_series.tolist()
+        logger.info(f"Vectorized processing completed in {time.time() - start_time:.1f}s")
         return cleaned_texts
         
     def _process_batch(self, batch, apply_nltk=True):
         """Process a single batch of texts (for multiprocessing)"""
-        cleaned_batch = []
-        for text in batch:
-            cleaned = self.clean_text(text)
-            if apply_nltk and NLTK_AVAILABLE:
-                cleaned = self.process_with_nltk(cleaned)
-            cleaned_batch.append(cleaned)
+        cleaned_batch = [self._process_single_text(text, apply_nltk) for text in batch]
         return cleaned_batch
         
     def is_url_column(self, col_name):
@@ -809,13 +764,8 @@ class TextCleaner:
             for col in text_columns:
                 if col in result_df.columns:
                     logger.info(f"Processing text column: {col}")
-                    # Process as a batch to utilize multiprocessing
-                    if len(result_df) > self.config.batch_size:
-                        result_df[col] = self.process_text_batch(result_df[col].fillna('').tolist())
-                    else:
-                        result_df[col] = result_df[col].fillna('').apply(self.clean_text)
+                    result_df[col] = self.process_text_batch(result_df[col].fillna('').tolist())
 
-      
         # Process URL columns
         if url_columns:
             for col in url_columns:
@@ -837,20 +787,21 @@ class TextCleaner:
     def _detect_text_columns(self, df, min_word_count=3, sample_size=100):
         """Auto-detect text columns based on average word count"""
         text_columns = []
-        
-        for col in df.select_dtypes(include=['object']).columns:
-            # Sample the column
-            sample = df[col].dropna().sample(min(sample_size, len(df[col].dropna())))
-            if sample.empty:
-                continue
-                
-            # Calculate average word count
-            avg_word_count = sample.astype(str).str.split().str.len().mean()
+
             
-            # If average word count exceeds threshold, consider it a text column
-            if avg_word_count >= min_word_count:
-                text_columns.append(col)
+        for col in df.select_dtypes(include=['object']).columns:
+                # Sample the column
+                sample = df[col].dropna().sample(min(sample_size, len(df[col].dropna())))
+                if sample.empty:
+                    continue
+                    
+                # Calculate average word count
+                avg_word_count = sample.astype(str).str.split().str.len().mean()
                 
+                # If average word count exceeds threshold, consider it a text column
+                if avg_word_count >= min_word_count:
+                    text_columns.append(col)
+                    
         return text_columns
 
     def _detect_url_columns(self, df, threshold=0.5, sample_size=100):
@@ -957,3 +908,5 @@ class TextCleaner:
         
         logger.info(f"Extracted link information for {len(result_df)} rows")
         return result_df
+
+        

@@ -69,7 +69,6 @@ for file_path in cleaned_files:
         structured_dataset = DataStructurer.load_and_clean_dataset(
             file_path,
             text_columns=text_columns,
-            url_columns=url_columns,
             columns_mapping=columns_mapping
         )
         
