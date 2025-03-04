@@ -4,7 +4,7 @@ from functools import lru_cache, partial
 import time
 import urllib.parse
 from urllib.parse import urlparse, urljoin, urlunparse
-from typing import List, Dict, Optional, Set, Any
+from typing import List, Dict, Optional, Set, Any, Tuple
 from enum import Enum
 from dataclasses import dataclass, field
 import concurrent.futures
@@ -17,43 +17,83 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# nltk importation
+# NLTK importation and resource management
 NLTK_AVAILABLE = False
+STOPWORDS: Set[str] = set()
+lemmatizer = None
+
 try:
     import nltk
     from nltk.stem import WordNetLemmatizer
     from nltk.tokenize import word_tokenize
     from nltk.corpus import stopwords
 
-    # Download necessary NLTK resources if not present
     @lru_cache(maxsize=1)
-    def _ensure_nltk_resource(resource):
+    def _ensure_nltk_resource(resource: str) -> bool:
+        """Ensure an NLTK resource is available, downloading if necessary.
+
+        Args:
+            resource: The NLTK resource path (e.g., 'tokenizers/punkt', 'corpora/wordnet').
+
+        Returns:
+            bool: True if resource is available or downloaded successfully, False otherwise.
+        """
         try:
             nltk.data.find(resource)
+            logger.debug(f"NLTK resource {resource} already available.")
+            return True
         except LookupError:
             logger.info(f"Downloading NLTK resource: {resource}")
-            nltk.download(resource, quiet=True)
+            try:
+                success = nltk.download(resource.split('/')[-1], quiet=True)
+                if success:
+                    logger.info(f"Successfully downloaded {resource}")
+                    return True
+                else:
+                    logger.error(f"Failed to download {resource}")
+                    return False
+            except Exception as e:
+                logger.error(f"Error downloading {resource}: {str(e)}")
+                return False
 
-    def ensure_nltk_resources(resources=('punkt', 'stopwords', 'wordnet')):
-        """Ensures multiple NLTK resources are available."""
+    def ensure_nltk_resources(resources: Tuple[str, ...] = ('punkt', 'stopwords', 'wordnet')) -> bool:
+        """Ensure multiple NLTK resources are available.
+
+        Args:
+            resources: Tuple of resource names to check/download.
+
+        Returns:
+            bool: True if all resources are available, False if any fail.
+        """
+        all_available = True
         for resource in resources:
             if resource == 'punkt':
-                _ensure_nltk_resource('tokenizers/punkt')
+                path = 'tokenizers/punkt'
             elif resource.startswith('corpora/'):
-                _ensure_nltk_resource(resource)
+                path = resource
             else:
-                _ensure_nltk_resource(f'corpora/{resource}')
+                path = f'corpora/{resource}'
+            if not _ensure_nltk_resource(path):
+                all_available = False
+        return all_available
 
-    ensure_nltk_resources()
+    # Attempt to ensure resources are available
+    if ensure_nltk_resources():
+        STOPWORDS = set(stopwords.words('english'))  # Default stopwords at module level
+        lemmatizer = WordNetLemmatizer()             # Default lemmatizer at module level
+        NLTK_AVAILABLE = True
+    else:
+        logger.warning("Some NLTK resources failed to download. Advanced features may be limited.")
 
-    STOPWORDS = set(stopwords.words('english'))
-    lemmatizer = WordNetLemmatizer()
-    NLTK_AVAILABLE = True
-
-except ImportError:
-    logger.warning(
-        "NLTK not available. Some advanced features will be disabled.")
+except ImportError as e:
+    logger.warning(f"NLTK not available: {str(e)}. Some advanced features will be disabled.")
     STOPWORDS = set()
+    lemmatizer = None
+
+except ImportError as e:
+    logger.warning(f"NLTK not available: {str(e)}. Some advanced features will be disabled.")
+    STOPWORDS = set()
+    lemmatizer = None
 
 DATEUTIL_AVAILABLE = False
 try:
@@ -125,7 +165,6 @@ class CleanerConfig:
     language: str = 'english'
     split_methods: Optional[List[str]] = None
     custom_stop_words: Optional[Set[str]] = None
-    print(f"DataProcessor initialized with split_methods: {split_methods} and custom_stop_words: {custom_stop_words}")  
     url_standardization_options: Optional[Dict[str, Any]] = None
     processing_strategy: ProcessingStrategy = ProcessingStrategy.AUTO
     batch_size: int = 1000
@@ -157,7 +196,7 @@ class CleanerConfig:
         else:
             logger.setLevel(logging.INFO)
         
-        valid_split_methods = ['camel', 'snake', 'kebab', 'number', 'team_names']  # Replace with actual valid names
+        valid_split_methods = ['camel', 'snake', 'kebab', 'number', 'team_names']
         if self.split_methods:
             for method in self.split_methods:
                 if method not in valid_split_methods:
@@ -165,47 +204,71 @@ class CleanerConfig:
 
 
 class NLTKManager:
-    """Manages NLTK resources and processing"""
-    
-    def __init__(self, language='english', custom_stop_words=None):
+    """Manages NLTK resources and text processing.
+
+    Attributes:
+        language (str): The language for stopwords and processing (default: 'english').
+        custom_stop_words (set): Optional custom stopwords to add.
+        stopwords (set): Loaded stopwords for the specified language.
+        lemmatizer (WordNetLemmatizer or None): NLTK lemmatizer instance if available.
+    """
+
+    def __init__(self, language: str = 'english', custom_stop_words: Optional[Set[str]] = None):
+        """Initialize the NLTKManager with language and custom stopwords."""
         if not NLTK_AVAILABLE:
+            logger.info("NLTK not available. Initializing with limited functionality.")
             self.stopwords = set()
             self.lemmatizer = None
+            self.language = language
+            self.custom_stop_words = custom_stop_words or set()
             return
-        
+
         self.language = language
         self.custom_stop_words = custom_stop_words or set()
         self.stopwords = self._load_stopwords()  # Load stopwords only once
         self.lemmatizer = WordNetLemmatizer()
 
     @lru_cache(maxsize=1)
-    def _load_stopwords(self):
-        """Load stopwords for the given language (cached)."""
+    def _load_stopwords(self) -> Set[str]:
+        """Load stopwords for the given language (cached).
+
+        Returns:
+            set: Set of stopwords, falling back to English if the language fails.
+        """
         try:
             stopwords_set = set(stopwords.words(self.language))
+            logger.debug(f"Loaded stopwords for language: {self.language}")
         except Exception as e:
             logger.warning(f"Error loading stopwords for '{self.language}': {e}. Falling back to English.")
-            stopwords_set = set(stopwords.words('english'))  # Fallback to English
-        
+            stopwords_set = set(stopwords.words('english'))
+
         if self.custom_stop_words:
             stopwords_set.update(self.custom_stop_words)
-        
+            logger.debug(f"Added {len(self.custom_stop_words)} custom stopwords.")
+
         return stopwords_set
 
-    def process_text(self, text):
-        """Tokenize, remove stopwords, and lemmatize text using NLTK."""
+    def process_text(self, text: Any) -> Any:
+        """Tokenize, remove stopwords, and lemmatize text using NLTK.
+
+        Args:
+            text: The text to process.
+
+        Returns:
+            Processed text as a string, or the original input if processing fails or NLTK is unavailable.
+        """
         if not NLTK_AVAILABLE or not isinstance(text, str):
+            logger.debug(f"Skipping NLTK processing: NLTK available={NLTK_AVAILABLE}, text type={type(text)}")
             return text
 
         try:
             words = word_tokenize(text)
-            words = [w for w in words if w not in self.stopwords]
+            words = [w for w in words if w.lower() not in self.stopwords]
             words = [self.lemmatizer.lemmatize(w) for w in words]
             return ' '.join(words)
         except Exception as e:
             logger.warning(f"Error processing text with NLTK: {e}")
             return text
-
 
 class MemoryMonitor:
     """Monitors memory usage during processing"""

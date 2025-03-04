@@ -19,7 +19,7 @@ class RegexPatterns:
     FLOATING_PUNCTUATION = re.compile(r'\s*([.,;:?!])\s*')
     BRACKETS_WITH_NUMBERS = re.compile(r'\[\s*(\d+)\s*\]\s*:\s*(\d+)')
     BRACKETS_SIMPLE = re.compile(r'\[\s*(\d+)\s*\]')
-    QUOTES_SPACING = re.compile(r'``\s*(.*?)\s*\'\'')
+    #QUOTES_SPACING = re.compile(r'``\s*(.*?)\s*\'\'')
     MULTI_DOTS = re.compile(r'\.{2,}')
     LONELY_PARENS = re.compile(r'\(\s*\)')
     MULTIPLE_DASHES = re.compile(r'-{2,}')
@@ -32,6 +32,7 @@ class RegexPatterns:
     REFERENCE_SECTION = re.compile(r'===+\s*reference\s*===+', re.IGNORECASE)
     PUNCTUATIONS = re.compile(r"''")
     CURRENCY_STANDARDIZER = re.compile(r'\$\s*([\d\s.]+)')
+    REDUNDANT_QUOTES = re.compile(r'\'\'\s*')
 
 def _ensure_string(text: Any) -> Optional[str]:
     """Ensure input is a string; return None if not."""
@@ -113,7 +114,7 @@ def clean_punctuation(text: Any) -> Optional[str]:
     text = RegexPatterns.REFERENCE_SECTION.sub(' Reference ', text)
     text = RegexPatterns.BACKTICKS.sub(' ', text)  
     text = RegexPatterns.CARET.sub(' ', text)     
-    text = RegexPatterns.QUOTES_SPACING.sub(r'"\1"', text)
+    #text = RegexPatterns.QUOTES_SPACING.sub(r'"\1"', text)
     text = RegexPatterns.FLOATING_PUNCTUATION.sub(r'\1 ', text)
     text = RegexPatterns.MULTI_DOTS.sub(r'.', text)
     text = RegexPatterns.LONELY_PARENS.sub(r'', text)
@@ -123,6 +124,7 @@ def clean_punctuation(text: Any) -> Optional[str]:
     text = RegexPatterns.PUNCTUATIONS.sub(r"'", text)
     text = RegexPatterns.MULTIPLE_PUNCTUATIONS.sub(' ', text)
     text = RegexPatterns.CURRENCY_STANDARDIZER.sub(" dollar ", text)
+    text = RegexPatterns.REDUNDANT_QUOTES.sub("", text)
     return text
 
 def general_word_splitter(text: Any, methods: Optional[List[str]] = None) -> Optional[str]:
