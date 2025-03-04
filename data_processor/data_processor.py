@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 import pandas as pd
 import logging
-from word_cleaner import TextCleaner
+from word_cleaner import TextCleaner, ProcessingStrategy, CleanerConfig
 import glob
 
 
@@ -18,8 +18,15 @@ class DataProcessor:
             split_methods (list): List of word splitting methods to use
             custom_stop_words (set/list): Additional stopwords to remove
         """
-        self.cleaner = TextCleaner(
-        split_methods,)
+    config = CleanerConfig(
+        language='english',
+        processing_strategy=ProcessingStrategy.AUTO,
+        verbose=True
+        # Add other config parameters as needed
+    )
+
+    # Initialize TextCleaner with the config object
+    cleaner = TextCleaner(config)
     
     def load_data(self, file_path):
         """
@@ -111,7 +118,7 @@ class DataProcessor:
             logging.warning("dropna_threshold should be between 0 and 1. Skipping dropna operation.")
 
         # Clean the DataFrame
-        df_cleaned = self.cleaner.clean_dataframe(
+        df_cleaned = self.cleaner.process_dataframe(
             df, 
             text_columns=text_columns,
             exclude_columns=exclude_columns,

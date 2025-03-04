@@ -1,1 +1,1 @@
-from .word_cleaner import TextCleaner
+from .word_cleaner import TextCleaner, ProcessingStrategy, CleanerConfig

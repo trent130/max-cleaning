@@ -775,9 +775,7 @@ class TextCleaner:
         """Standardize a batch of URLs"""
         return self.url_processor.standardize_urls(urls)
         
-    def extract_links(self, html_content, base_url=None):
-        """Extract links from HTML content"""
-        return self.url_processor.extract_links_from_html(html_content)
+
     def process_dataframe(self, df, text_columns=None, url_columns=None, datetime_columns=None):
         """
         Process a complete DataFrame with text cleaning, URL standardization, and datetime processing
