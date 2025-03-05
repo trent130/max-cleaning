@@ -11,6 +11,8 @@ import concurrent.futures
 import multiprocessing
 import psutil
 import pandas as pd
+from calendar import month_name
+from pandas import DataFrame, Series
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO,
@@ -495,81 +497,100 @@ class URLProcessor:
 
 class DatetimeProcessor:
     """Handles datetime detection and standardization in both columns and inside text fields."""
-    
+
+    # Class-level attributes
+    month_to_num = {name.lower(): f"{i:02}" for i, name in enumerate(month_name) if i}
+    full_date_pattern = re.compile(
+        r'\b(' + '|'.join(month_to_num.keys()) + r')\s+(\d{1,2})\s+(\d{4})\b', flags=re.IGNORECASE
+    )
+    month_year_pattern = re.compile(
+        r'\b(' + '|'.join(month_to_num.keys()) + r')\s+(\d{4})\b', flags=re.IGNORECASE
+    )
+    yyyymmdd_pattern = re.compile(r'\b(20\d{6})\b')  # Assuming YYYYMMDD starts with 20
+
     def __init__(self, config: CleanerConfig):
+        """Initialize with config validation."""
+        if not hasattr(config, 'datetime_format') or not isinstance(config.datetime_format, str):
+            raise ValueError("config must have a 'datetime_format' attribute of type str")
+        if not hasattr(config, 'datetime_threshold') or not isinstance(config.datetime_threshold, (int, float)):
+            raise ValueError("config must have a 'datetime_threshold' attribute of type int or float")
+        if not hasattr(config, 'datetime_patterns') or not isinstance(config.datetime_patterns, list):
+            raise ValueError("config must have a 'datetime_patterns' attribute of type list")
         self.output_format = config.datetime_format
         self.threshold = config.datetime_threshold
-        self.patterns = config.datetime_patterns  # Use patterns from CleanerConfig
+        self.patterns = config.datetime_patterns
 
-    def standardize_datetime_column(self, series):
-        """Standardize a datetime column"""
-        parsed_series = pd.to_datetime(series,format=self.output_format, errors='coerce')
-        return parsed_series.dt.strftime(self.output_format).fillna('')
-    
-    def detect_datetime_column(self, series):
+    def standardize_datetime_column(self, series: Series) -> Series:
+        """Standardize a datetime column, preserving original values if parsing fails."""
+        parsed_series = pd.to_datetime(series, format=self.output_format, errors='coerce')
+        standardized = parsed_series.dt.strftime(self.output_format).where(parsed_series.notna(), series)
+        if (parsed_series.isna() & series.notna()).any():
+            logging.warning(f"Some values in column could not be parsed with format '{self.output_format}'")
+        return standardized
+
+    def detect_datetime_column(self, series: Series) -> bool:
         """Detect if a column contains datetime values based on a threshold."""
         if series.empty or not pd.api.types.is_string_dtype(series):
             return False
-
-        # Sample a limited number of rows for efficiency
         sample_size = min(len(series), 1000)
         sample = series.dropna().sample(sample_size, random_state=42)
-
-        # Convert values to datetime, setting errors='coerce' to convert invalid values to NaT
         parsed_sample = pd.to_datetime(sample, format=self.output_format, errors='coerce')
-
-        # Calculate percentage of valid datetime values
         valid_percentage = parsed_sample.notna().sum() / sample_size
-
         return valid_percentage >= self.threshold
 
-    def standardize_datetime_in_text(self, text):
+    def standardize_full_date(self, match: re.Match) -> str:
+        """Convert 'March 9 2011' to '2011-03-09'."""
+        month_str, day, year = match.groups()
+        month_num = self.month_to_num.get(month_str.lower(), "00")
+        day_formatted = f"{int(day):02}"
+        return f"{year}-{month_num}-{day_formatted}"
+
+    def standardize_month_year(self, match: re.Match) -> str:
+        """Convert 'July 2011' to '2011-07'."""
+        month_str, year = match.groups()
+        month_num = self.month_to_num.get(month_str.lower(), "00")
+        return f"{year}-{month_num}"
+
+    def standardize_yyyymmdd(self, match: re.Match) -> str:
+        """Convert 'YYYYMMDD' to 'YYYY-MM-DD'."""
+        date_str = match.group(1)
+        return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+
+    def standardize_datetime_in_text(self, text: str) -> str:
         """Find and standardize datetime patterns inside text content."""
         if not isinstance(text, str) or not text.strip():
             return text
-        
-        def replace_match(match):
+        text = self.full_date_pattern.sub(self.standardize_full_date, text)
+        text = self.month_year_pattern.sub(self.standardize_month_year, text)
+        text = self.yyyymmdd_pattern.sub(self.standardize_yyyymmdd, text)
+
+        def replace_match_dateutil(match: re.Match) -> str:
             date_str = match.group(1)
             try:
                 parsed_date = dateutil_parse(date_str)
                 return parsed_date.strftime(self.output_format)
             except Exception:
-                return date_str  # Return original if parsing fails
-        
+                return date_str
+
         for pattern in self.patterns:
-            text = re.sub(pattern, replace_match, text)
-        
+            text = re.sub(pattern, replace_match_dateutil, text)
         return text
 
-    def detect_and_standardize_datetimes(self, df, text_columns=None):
-        """
-        Detect datetime columns and also process datetime values embedded in text content.
-        
-        Args:
-            df (pd.DataFrame): Input DataFrame.
-            text_columns (list): List of columns to search for datetime inside text.
-            
-        Returns:
-            pd.DataFrame: DataFrame with datetime fields and text-based datetime values standardized.
-        """
+    def detect_and_standardize_datetimes(self, df: DataFrame, text_columns: Optional[List[str]] = None) -> DataFrame:
+        """Detect and standardize datetime columns and embedded datetime values in text."""
         new_df = df.copy()
-
-        # Step 1: Detect & Standardize Date Columns
         for col in new_df.columns:
             if new_df[col].dtype == 'object' or pd.api.types.is_string_dtype(new_df[col]):
                 if self.detect_datetime_column(new_df[col]):
-                    logger.info(f"Column '{col}' detected as datetime and will be standardized")
+                    logging.info(f"Column '{col}' detected as datetime and will be standardized")
                     new_df[col] = self.standardize_datetime_column(new_df[col])
                 else:
-                    logger.debug(f"Column '{col}' not detected as datetime")
-
-        # Step 2: Standardize Datetime Inside Text Columns
+                    logging.debug(f"Column '{col}' not detected as datetime")
         if text_columns:
             for col in text_columns:
                 if col in new_df.columns and pd.api.types.is_string_dtype(new_df[col]):
-                    logger.info(f"Checking '{col}' for embedded datetime values")
+                    logging.info(f"Checking '{col}' for embedded datetime values")
                     new_df[col] = new_df[col].apply(self.standardize_datetime_in_text)
-        
         return new_df
 
 class TextCleaner:

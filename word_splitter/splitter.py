@@ -30,7 +30,7 @@ class RegexPatterns:
     CARET = re.compile(r'\s*\^+\s*')
     SEE_ALSO_SECTION = re.compile(r'===+\s*see also\s*===+', re.IGNORECASE)
     REFERENCE_SECTION = re.compile(r'===+\s*reference\s*===+', re.IGNORECASE)
-    PUNCTUATIONS = re.compile(r"''")
+    PUNCTUATIONS = re.compile(r"[^\w\s$.,-]")
     CURRENCY_STANDARDIZER = re.compile(r'\$\s*([\d\s.]+)')
     REDUNDANT_QUOTES = re.compile(r'\'\'\s*')
 
@@ -109,11 +109,13 @@ def clean_punctuation(text: Any) -> Optional[str]:
     text = _ensure_string(text)
     if not text:
         return text
+
+    text = re.sub('``', '', text)
     
     text = RegexPatterns.SEE_ALSO_SECTION.sub(' See also ', text)
     text = RegexPatterns.REFERENCE_SECTION.sub(' Reference ', text)
-    text = RegexPatterns.BACKTICKS.sub(' ', text)  
-    text = RegexPatterns.CARET.sub(' ', text)     
+    text = RegexPatterns.BACKTICKS.sub('', text)  
+    text = RegexPatterns.CARET.sub('', text)     
     #text = RegexPatterns.QUOTES_SPACING.sub(r'"\1"', text)
     text = RegexPatterns.FLOATING_PUNCTUATION.sub(r'\1 ', text)
     text = RegexPatterns.MULTI_DOTS.sub(r'.', text)
@@ -122,9 +124,10 @@ def clean_punctuation(text: Any) -> Optional[str]:
     text = RegexPatterns.STANDALONE_EQUALS.sub(r'', text)
     text = RegexPatterns.STANDALONE_SYMBOLS.sub(r'\1 ', text)
     text = RegexPatterns.PUNCTUATIONS.sub(r"'", text)
-    text = RegexPatterns.MULTIPLE_PUNCTUATIONS.sub(' ', text)
+    text = RegexPatterns.MULTIPLE_PUNCTUATIONS.sub('', text)
     text = RegexPatterns.CURRENCY_STANDARDIZER.sub(" dollar ", text)
     text = RegexPatterns.REDUNDANT_QUOTES.sub("", text)
+    text = RegexPatterns.EXCESS_SPACES.sub(' ', text)
     return text
 
 def general_word_splitter(text: Any, methods: Optional[List[str]] = None) -> Optional[str]:
@@ -142,7 +145,7 @@ def general_word_splitter(text: Any, methods: Optional[List[str]] = None) -> Opt
     if not text:
         return text
     
-    text = re.sub('===', '', text)
+    # text = re.sub('===', '', text)
     default_methods = ['camel', 'snake', 'kebab', 'number', 'team_names']
     methods = methods if methods is not None else default_methods
 
@@ -207,7 +210,7 @@ def football_text_cleaner(text: Any) -> Optional[str]:
     result = RegexPatterns.SPECIAL_ABBREVIATIONS.sub('49ers', result)
     result = RegexPatterns.PRESERVE_NUMERIC_TEAMS.sub(r'\1', result)
     result = RegexPatterns.SPECIAL_CHARS.sub(
-    lambda m: f"{m.group(1) or m.group(3)} {m.group(2) or m.group(4)}", result)
+        lambda m: f"{m.group(1) or m.group(3)} {m.group(2) or m.group(4)}", result)
     result = RegexPatterns.YEAR_RANGES.sub(r'(\1-\2)', result)
     return result.strip()
 
