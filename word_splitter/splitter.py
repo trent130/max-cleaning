@@ -33,6 +33,7 @@ class RegexPatterns:
     PUNCTUATIONS = re.compile(r"[^\w\s$.,-]")
     CURRENCY_STANDARDIZER = re.compile(r'\$\s*([\d\s.]+)')
     REDUNDANT_QUOTES = re.compile(r'\'\'\s*')
+    BRACKETED_NUMBERS = re.compile(r'\[\s*\d+\s*\]')
 
 def _ensure_string(text: Any) -> Optional[str]:
     """Ensure input is a string; return None if not."""
@@ -128,6 +129,7 @@ def clean_punctuation(text: Any) -> Optional[str]:
     text = RegexPatterns.CURRENCY_STANDARDIZER.sub(" dollar ", text)
     text = RegexPatterns.REDUNDANT_QUOTES.sub("", text)
     text = RegexPatterns.EXCESS_SPACES.sub(' ', text)
+    text = RegexPatterns.BRACKETED_NUMBERS.sub('', text)
     return text
 
 def general_word_splitter(text: Any, methods: Optional[List[str]] = None) -> Optional[str]:

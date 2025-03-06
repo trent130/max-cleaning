@@ -15,9 +15,12 @@ from calendar import month_name
 from pandas import DataFrame, Series
 
 # Initialize logging
+LOG_FILE = 'cleaner.log'
 logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    filename=LOG_FILE)
 logger = logging.getLogger(__name__)
+
 
 # NLTK importation and resource management
 NLTK_AVAILABLE = False
