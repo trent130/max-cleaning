@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 import pandas as pd
 import logging
-from word_cleaner import TextCleaner
+from word_cleaner import TextCleaner, ProcessingStrategy, CleanerConfig
 import glob
 
 
@@ -18,13 +18,16 @@ class DataProcessor:
             split_methods (list): List of word splitting methods to use
             custom_stop_words (set/list): Additional stopwords to remove
         """
-        self.cleaner = TextCleaner(
-        split_methods,
-        custom_stop_words,     
-        url_standardization_options={
-            'remove_query_params': ['utm_source', 'ref'],
-            'remove_fragments': True
-        })
+        config = CleanerConfig(
+            language='english',
+            split_methods=split_methods,
+            custom_stop_words=custom_stop_words,
+            processing_strategy=ProcessingStrategy.AUTO,
+            verbose=True
+        )
+
+        # Initialize TextCleaner with the config object
+        self.cleaner = TextCleaner(config)
     
     def load_data(self, file_path):
         """
@@ -116,11 +119,9 @@ class DataProcessor:
             logging.warning("dropna_threshold should be between 0 and 1. Skipping dropna operation.")
 
         # Clean the DataFrame
-        df_cleaned = self.cleaner.clean_dataframe(
+        df_cleaned = self.cleaner.process_dataframe(
             df, 
             text_columns=text_columns,
-            exclude_columns=exclude_columns,
-            apply_nltk=apply_nltk
         )
 
         if df_cleaned is not None:
