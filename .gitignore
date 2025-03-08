@@ -1,1 +1,9 @@
 data/
+.scraper_cache/
+keyword_data/
+cleaned_javascript_tutorial_data_optimized.csv
+improved_scraper.py
+war_results.py
+word_cleaner/long_taker.txt
+keyword_scraper.log
+cleaner.log
