@@ -12,7 +12,7 @@ class DataStructurer:
         pass
 
     @staticmethod
-    def load_and_clean_dataset(file_path, text_columns=None, url_column=None, columns_mapping=None):
+    def load_and_clean_dataset(file_path, text_columns=None, url_column=None, columns_mapping=None, interactive_column_selection=False):
         """
         Load and clean a dataset from a file and structure it.
 
@@ -36,7 +36,7 @@ class DataStructurer:
                     # Simple check for list-like strings
                     if text.startswith('[') and text.endswith(']'):
                         try:
-                            # Try simplified string splitting for basic lists
+                            # simplified string splitting for basic lists
                             items = text[1:-1].split(',')
                             return ' '.join(item.strip().strip("'\"") for item in items)
                         except Exception as e:
@@ -70,14 +70,42 @@ class DataStructurer:
                 dataset[f"{url_column}_valid"] = dataset[url_column].apply(is_valid_url)
             elif url_column:
                 logging.warning(f"URL column '{url_column}' not found in {file_path}.")
+            # interactive column selections
+            columns_to_drop = []
+            interactive_mapping = {} # to store mapping from interactive selection
+
+
+            if interactive_column_selection:
+                print("\nInteractive Column Selection:")
+                for col in dataset.columns:
+                    while True:
+                        action = input(f"\nColumn '{col}' choose action (rename/drop/keep/r/d/k):").lower()
+                        if action in ['rename', 'r']:
+                            new_name = input(f"\Enter new name for the {col}")
+                            interactive_mapping[col] = new_name
+                            break
+                        elif action in ['drop', 'd']:
+                            columns_to_drop.append(col)
+                            break
+                        elif action in ['keep', 'k']:
+                            break
+                        else:
+                            print("Invalid choice. Please choose between 'rename', 'drop', or 'keep'")
+                        
+                        # drop the selected columns
+                        dataset = dataset.drop(columns=columns_to_drop)
+
+                        # apply interactive mapping
+                        dataset = dataset.rename(columns=interactive_mapping)
 
             # Structure the dataset using columns_mapping if provided
             if columns_mapping:
                 missing = [k for k in columns_mapping.keys() if k not in dataset.columns]
                 if missing:
                     logging.warning(f"The following expected columns are missing in {file_path}: {missing}")
-                # Only keep and rename the columns that exist
-                valid_mapping = {k: v for k, v in columns_mapping.items() if k in dataset.columns}
+                # combined mapping, prioritizing columns_mapping if there are overlaps
+                combined_mapping = {**interactive_mapping, **columns_mapping}
+                valid_mapping = {k: v for k, v in combined_mapping.items() if k in dataset.columns}
                 structured_dataset = dataset[list(valid_mapping.keys())].rename(columns=valid_mapping)
             else:
                 structured_dataset = dataset
@@ -122,7 +150,8 @@ class DataStructurer:
                     file_path,
                     text_columns=text_columns,
                     url_column=url_column,
-                    columns_mapping=columns_mapping
+                    columns_mapping=columns_mapping,
+                    interactive_column_selection=True
                 )
                 if structured_dataset is not None:
                     file_name = os.path.basename(file_path)

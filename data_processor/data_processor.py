@@ -9,11 +9,11 @@ import glob
 class DataProcessor:
     """A class for loading, cleaning, and exporting data."""
     output_directory = "/home/trent/Desktop/data-structuring/data"
-    
-    def __init__(self, split_methods=None, custom_stop_words=None, ):
+
+    def __init__(self, split_methods=None, custom_stop_words=None):
         """
         Initialize the DataProcessor(with the text cleaner class being initialized to be used inside the data processor class).
-        
+
         Args:
             split_methods (list): List of word splitting methods to use
             custom_stop_words (set/list): Additional stopwords to remove
@@ -23,25 +23,26 @@ class DataProcessor:
             split_methods=split_methods,
             custom_stop_words=custom_stop_words,
             processing_strategy=ProcessingStrategy.AUTO,
-            verbose=True
+            verbose=True,
+            detect_code_and_clean=True  # Enable code detection and cleaning
         )
 
         # Initialize TextCleaner with the config object
         self.cleaner = TextCleaner(config)
-    
+
     def load_data(self, file_path):
         """
         Load data from a file based on its extension.
-        
+
         Args:
             file_path (str): Path to the data file
-            
+
         Returns:
             pd.DataFrame: Loaded DataFrame
         """
         try:
             file_extension = os.path.splitext(file_path)[1].lower()
-            
+
             if file_extension == '.csv':
                 return pd.read_csv(file_path)
             elif file_extension == '.json':
@@ -50,15 +51,15 @@ class DataProcessor:
                 return pd.read_excel(file_path)
             else:
                 raise ValueError(f"Unsupported file format: {file_extension}")
-                
+
         except Exception as e:
             logging.error(f"Error loading file {file_path}: {e}")
             return None
-    
+
     def export_data(self, df, filename="cleaned_data", formats=None):
         """
         Export DataFrame to multiple formats.
-        
+
         Args:
             df (pd.DataFrame): DataFrame to export
             filename (str): Base filename for export
@@ -66,29 +67,29 @@ class DataProcessor:
         """
         if formats is None:
             formats = ['csv', 'json', 'xlsx']
-        
+
         # Create a timestamp for unique filenames
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_filename = f"{filename}_{timestamp}"
-        
+
         try:
             if 'csv' in formats:
                 df.to_csv(f"{output_filename}.csv", index=False)
                 logging.info(f"Data exported as {output_filename}.csv")
-            
+
             if 'json' in formats:
                 df.to_json(f"{output_filename}.json", orient="records", indent=4)
                 logging.info(f"Data exported as {output_filename}.json")
-            
+
             if 'xlsx' in formats:
                 df.to_excel(f"{output_filename}.xlsx", index=False)
                 logging.info(f"Data exported as {output_filename}.xlsx")
-        
+
         except Exception as e:
             logging.error(f"Error exporting data: {e}")
-    
 
-    def process_file(self, file_path, text_columns=None, exclude_columns=None, 
+
+    def process_file(self, file_path, text_columns=None, exclude_columns=None,
                     apply_nltk=True, dropna_threshold=0.5, export_formats=None, output_dir=output_directory):
         """
         Process a single data file and save the cleaned version.
@@ -120,7 +121,7 @@ class DataProcessor:
 
         # Clean the DataFrame
         df_cleaned = self.cleaner.process_dataframe(
-            df, 
+            df,
             text_columns=text_columns,
         )
 
